@@ -34,7 +34,11 @@ target_link_libraries(${PROJECT_NAME}
     gtsam
 )
 
-target_include_directories(${PROJECT_NAME} PRIVATE "${GTSAM_SOURCE_DIR}/gtsam/")
+target_include_directories(${PROJECT_NAME}
+    PRIVATE
+    "${GTSAM_SOURCE_DIR}/gtsam/"
+    "${GTSAM_BINARY_DIR}/"
+    )
 
 # Private lib Dependencies:
 target_link_libraries(${PROJECT_NAME}

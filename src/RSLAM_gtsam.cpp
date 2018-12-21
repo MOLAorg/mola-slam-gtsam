@@ -33,7 +33,7 @@ RSLAM_gtsam::RSLAM_gtsam()
 {
     this->setLoggerName("RSLAM_gtsam");
 
-    gtsam::BetweenFactor<double> f(1, 2);
+    gtsam::BetweenFactor<double> f;
 }
 
 void RSLAM_gtsam::initialize(const std::string& cfg_block)
