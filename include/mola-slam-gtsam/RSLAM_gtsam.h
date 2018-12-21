@@ -11,6 +11,7 @@
  */
 #pragma once
 
+#include <gtsam/slam/BetweenFactor.h>
 #include <mola-kernel/BackEndBase.h>
 
 namespace mola

@@ -32,6 +32,8 @@ MRPT_INITIALIZER(do_register){MOLA_REGISTER_MODULE(RSLAM_gtsam)}
 RSLAM_gtsam::RSLAM_gtsam()
 {
     this->setLoggerName("RSLAM_gtsam");
+
+    gtsam::BetweenFactor<double> f(1, 2);
 }
 
 void RSLAM_gtsam::initialize(const std::string& cfg_block)
