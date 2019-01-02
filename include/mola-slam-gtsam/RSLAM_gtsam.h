@@ -11,8 +11,10 @@
  */
 #pragma once
 
-#include <gtsam/slam/BetweenFactor.h>
+// mrpt includes first:
 #include <mola-kernel/BackEndBase.h>
+// gtsam next:
+#include <gtsam/slam/BetweenFactor.h>
 
 namespace mola
 {
@@ -28,6 +30,10 @@ class RSLAM_gtsam : public BackEndBase
     // See docs in base class
     void initialize(const std::string& cfg_block) override;
     void spinOnce() override;
+
+    // Impl. if virtual methods. See base class docs:
+    void onProposeNewKeyFrame(
+        const ProposeKF_Input& i, ProposeKF_Output& o) override;
 
    private:
 };

@@ -14,9 +14,8 @@
  * MOLA module: Relative SLAM back-end based on GTSAM factor graphs.
  *
  *  This is *the reference implementation* of SLAM for MOLA as the time of
- * writing, although users are free of creating derived or brancd new SLAM
+ * writing, although users are free of creating derived or brand new SLAM
  * modules as needed.
- *
  *
  */
 
@@ -55,6 +54,17 @@ void RSLAM_gtsam::spinOnce()
 {
     MRPT_START
     ProfilerEntry tleg(profiler_, "spinOnce");
+
+    MRPT_END
+}
+
+void RSLAM_gtsam::onProposeNewKeyFrame(
+    const ProposeKF_Input& i, ProposeKF_Output& o)
+{
+    MRPT_START
+    ProfilerEntry tleg(profiler_, "onProposeNewKeyFrame");
+
+    MRPT_LOG_DEBUG("Creating new KeyFrame");
 
     MRPT_END
 }
