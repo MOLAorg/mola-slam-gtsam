@@ -67,8 +67,12 @@ BackEndBase::ProposeKF_Output RSLAM_gtsam::doProposeNewKeyFrame(
 
     MRPT_LOG_DEBUG("Creating new KeyFrame");
 
-    // worldmodel_->
+    auto& ents = *worldmodel_->entities_;
 
+    MRPT_TODO("Continue here!");
+    auto e      = std::make_shared<EntityBase>();
+    o.new_kf_id = ents.emplace_back(e);
+    o.success   = true;
     return o;
 
     MRPT_END
