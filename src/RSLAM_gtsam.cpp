@@ -58,13 +58,18 @@ void RSLAM_gtsam::spinOnce()
     MRPT_END
 }
 
-void RSLAM_gtsam::onProposeNewKeyFrame(
-    const ProposeKF_Input& i, ProposeKF_Output& o)
+BackEndBase::ProposeKF_Output RSLAM_gtsam::doProposeNewKeyFrame(
+    const ProposeKF_Input& i)
 {
     MRPT_START
-    ProfilerEntry tleg(profiler_, "onProposeNewKeyFrame");
+    ProfilerEntry    tleg(profiler_, "doProposeNewKeyFrame");
+    ProposeKF_Output o;
 
     MRPT_LOG_DEBUG("Creating new KeyFrame");
+
+    // worldmodel_->
+
+    return o;
 
     MRPT_END
 }

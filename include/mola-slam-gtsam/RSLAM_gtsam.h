@@ -32,8 +32,7 @@ class RSLAM_gtsam : public BackEndBase
     void spinOnce() override;
 
     // Impl. if virtual methods. See base class docs:
-    void onProposeNewKeyFrame(
-        const ProposeKF_Input& i, ProposeKF_Output& o) override;
+    ProposeKF_Output doProposeNewKeyFrame(const ProposeKF_Input& i) override;
 
    private:
 };
