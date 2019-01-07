@@ -4,28 +4,32 @@
  * See LICENSE for license information.
  * ------------------------------------------------------------------------- */
 /**
- * @file   RSLAM_gtsam.h
- * @brief  Reference implementation of relative SLAM with GTSAM factor graphs
+ * @file   ASLAM_gtsam.h
+ * @brief  SLAM in absolute coordinates with GTSAM factor graphs
  * @author Jose Luis Blanco Claraco
- * @date   Dec 21, 2018
+ * @date   Jan 08, 2018
  */
 #pragma once
 
 // mrpt includes first:
 #include <mola-kernel/BackEndBase.h>
 // gtsam next:
-#include <gtsam/slam/BetweenFactor.h>
+#include <gtsam/nonlinear/ISAM2.h>
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
+
+#include <mutex>
 
 namespace mola
 {
-/** Reference implementation of relative SLAM with GTSAM factor graphs
+/** Reference implementation of absolute-coordinates SLAM with GTSAM factor
+ * graphs.
  * See docs in: \ref mola_slam_gtsam_grp
  * \ingroup mola_slam_gtsam_grp */
-class RSLAM_gtsam : public BackEndBase
+class ASLAM_gtsam : public BackEndBase
 {
    public:
-    RSLAM_gtsam();
-    ~RSLAM_gtsam() override = default;
+    ASLAM_gtsam();
+    ~ASLAM_gtsam() override = default;
 
     // See docs in base class
     void initialize(const std::string& cfg_block) override;
@@ -36,6 +40,21 @@ class RSLAM_gtsam : public BackEndBase
     AddFactor_Output doAddFactor(Factor& f) override;
 
    private:
+    struct SLAM_state
+    {
+        /** Incremental estimator */
+        gtsam::ISAM2 isam2;
+
+        /** Pending new elements to add to the map */
+        gtsam::NonlinearFactorGraph newfactors;
+        gtsam::Values               newvalues;
+
+        /** Absolute coordinates single reference frame */
+        id_t root_kf_id{mola::INVALID_ID};
+    };
+
+    SLAM_state                 state_;
+    std::recursive_timed_mutex isam2_lock_;
 };
 
 }  // namespace mola

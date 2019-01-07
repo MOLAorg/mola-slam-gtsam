@@ -10,23 +10,11 @@
  * @date   Dec 21, 2018
  */
 
-/** \defgroup mola_slam_gtsam_grp mola-slam-gtsam
- * MOLA module: Relative SLAM back-end based on GTSAM factor graphs.
- *
- *  This is *the reference implementation* of SLAM for MOLA as the time of
- * writing, although users are free of creating derived or brand new SLAM
- * modules as needed.
- *
- */
-
 #include <mola-kernel/yaml_helpers.h>
 #include <mola-slam-gtsam/RSLAM_gtsam.h>
-#include <mrpt/core/initializer.h>
 #include <yaml-cpp/yaml.h>
 
 using namespace mola;
-
-MRPT_INITIALIZER(do_register){MOLA_REGISTER_MODULE(RSLAM_gtsam)}
 
 RSLAM_gtsam::RSLAM_gtsam()
 {
@@ -58,11 +46,11 @@ void RSLAM_gtsam::spinOnce()
     MRPT_END
 }
 
-BackEndBase::ProposeKF_Output RSLAM_gtsam::doProposeNewKeyFrame(
+BackEndBase::ProposeKF_Output RSLAM_gtsam::doAddKeyFrame(
     const ProposeKF_Input& i)
 {
     MRPT_START
-    ProfilerEntry    tleg(profiler_, "doProposeNewKeyFrame");
+    ProfilerEntry    tleg(profiler_, "doAddKeyFrame");
     ProposeKF_Output o;
 
     MRPT_LOG_DEBUG("Creating new KeyFrame");
@@ -74,6 +62,15 @@ BackEndBase::ProposeKF_Output RSLAM_gtsam::doProposeNewKeyFrame(
     o.new_kf_id = ents.emplace_back(e);
     o.success   = true;
     return o;
+
+    MRPT_END
+}
+
+BackEndBase::AddFactor_Output RSLAM_gtsam::doAddFactor(Factor& f)
+{
+    MRPT_START
+
+    THROW_EXCEPTION("Implement me!");
 
     MRPT_END
 }
