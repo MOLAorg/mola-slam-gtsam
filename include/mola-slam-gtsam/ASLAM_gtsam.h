@@ -37,7 +37,7 @@ class ASLAM_gtsam : public BackEndBase
 
     // Impl. if virtual methods. See base class docs:
     ProposeKF_Output doAddKeyFrame(const ProposeKF_Input& i) override;
-    AddFactor_Output doAddFactor(Factor& f) override;
+    AddFactor_Output doAddFactor(Factor& newF) override;
 
    private:
     struct SLAM_state

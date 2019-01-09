@@ -11,12 +11,14 @@
  */
 
 // MRPT headers must come first (due to Eigen plugin)
+#include <mola-kernel/variant_helper.h>
 #include <mola-kernel/yaml_helpers.h>
 #include <mola-slam-gtsam/ASLAM_gtsam.h>
 #include <yaml-cpp/yaml.h>
 
 // GTSAM second:
 #include <gtsam/geometry/Pose3.h>
+#include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 
 using namespace mola;
@@ -42,23 +44,12 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
 
     MRPT_TODO("Add priorities to initialize() for the map to be set-up 1st");
 
-    // Create the single absolute coordinate reference frame in the map:
-    {
-        ASSERT_(worldmodel_->entities_);
+    // Ensure we have access to the worldmodel:
+    ASSERT_(worldmodel_);
+    ASSERT_(worldmodel_->entities_);
+    // ASSERT_(worldmodel_->factors_);
 
-        auto&          ents = *worldmodel_->entities_;
-        mola::RefPose3 root;
-        state_.root_kf_id = ents.emplace_back(root);
-
-        // And add a prior to iSAM2:
-        auto priorModel = gtsam::noiseModel::Diagonal::Variances(
-            (gtsam::Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4)
-                .finished());
-
-        state_.newvalues.insert(state_.root_kf_id, gtsam::Pose3::identity());
-        state_.newfactors.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
-            state_.root_kf_id, gtsam::Pose3(), priorModel);
-    }
+    MRPT_TODO("Load existing map from world model?");
 
     MRPT_END
 }
@@ -68,10 +59,13 @@ void ASLAM_gtsam::spinOnce()
     ProfilerEntry tleg(profiler_, "spinOnce");
 
     // Incremental SAM solution:
-    gtsam::Values                        result;
-    std::lock_guard<typeof(isam2_lock_)> lock(isam2_lock_);
+    gtsam::Values result;
+
+    if (!state_.newfactors.empty())
     {
+        std::lock_guard<typeof(isam2_lock_)> lock(isam2_lock_);
         ProfilerEntry tleg2(profiler_, "spinOnce.isam2_update");
+
         state_.isam2.update(state_.newfactors, state_.newvalues);
         result = state_.isam2.calculateEstimate();
 
@@ -99,33 +93,79 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
 
     // Create entities in the worldmodel:
     auto& ents = *worldmodel_->entities_;
+    MRPT_TODO("Map lock?");
 
-    mola::RelPose3KF new_kf;
-    new_kf.base_id_ = state_.root_kf_id;
+    // If this is the first KF, create an absolute coordinate reference frame in
+    // the map:
+    if (state_.root_kf_id == INVALID_ID)
+    {
+        mola::RefPose3 root;
+        state_.root_kf_id = ents.emplace_back(root);
 
-    // Copy the raw observations (shallow copy):
-    if (i.observations)
-        new_kf.raw_observations_ =
-            mrpt::obs::CSensoryFrame::Create(i.observations.value());
+        // And add a prior to iSAM2:
+        auto priorModel = gtsam::noiseModel::Diagonal::Variances(
+            (gtsam::Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4)
+                .finished());
 
-    // Add to the map:
-    o.new_kf_id = ents.emplace_back(new_kf);
-    o.success   = true;
-    return o;
+        state_.newvalues.insert(state_.root_kf_id, gtsam::Pose3::identity());
+        state_.newfactors.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
+            state_.root_kf_id, gtsam::Pose3(), priorModel);
+
+        // Return:
+        o.new_kf_id = state_.root_kf_id;
+        o.success   = true;
+        return o;
+    }
+    else
+    {
+        // Regular KF:
+        mola::RelPose3KF new_kf;
+        new_kf.base_id_ = state_.root_kf_id;
+
+        // Copy the raw observations (shallow copy):
+        if (i.observations)
+            new_kf.raw_observations_ =
+                mrpt::obs::CSensoryFrame::Create(i.observations.value());
+
+        // Add to the map:
+        o.new_kf_id = ents.emplace_back(new_kf);
+        o.success   = true;
+        return o;
+    }
 
     MRPT_END
 }
 
-BackEndBase::AddFactor_Output ASLAM_gtsam::doAddFactor(Factor& f)
+BackEndBase::AddFactor_Output ASLAM_gtsam::doAddFactor(Factor& newF)
 {
     MRPT_START
     ProfilerEntry    tleg(profiler_, "doAddFactor");
     AddFactor_Output o;
 
-    MRPT_LOG_DEBUG("Adding new factor");
-
     // Create in the worldmodel:
-    auto& facts = *worldmodel_->factors_;
+    auto&       facts   = *worldmodel_->factors_;
+    mola::fid_t newf_id = INVALID_FID;
+
+    std::visit(
+        overloaded{
+            [&](const FactorRelativePose3& f) {
+                MRPT_LOG_DEBUG("Adding new FactorRelativePose3");
+                gtsam::Rot3   R;  //= Rot3::Quaternion(qw, qx, qy, qz);
+                gtsam::Point3 t(1.0, 0, 0);
+                gtsam::Pose3  measure(R, t), to_pose_est;  // = fa->rel_pose_
+                state_.newvalues.insert(f.to_kf_, to_pose_est);
+                newf_id    = 1123;
+                auto noise = gtsam::noiseModel::Isotropic::Sigma(6, 0.1);
+                state_.newfactors
+                    .emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
+                        f.from_kf_, f.to_kf_, measure, noise);
+            },
+            [this, newF](auto f) { MRPT_LOG_ERROR("Unknown factor type!"); },
+        },
+        newF);
+
+    o.success       = true;
+    o.new_factor_id = newf_id;
 
     return o;
 
