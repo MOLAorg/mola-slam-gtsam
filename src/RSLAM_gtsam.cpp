@@ -16,12 +16,7 @@
 
 using namespace mola;
 
-RSLAM_gtsam::RSLAM_gtsam()
-{
-    this->setLoggerName("RSLAM_gtsam");
-
-    gtsam::BetweenFactor<double> f;
-}
+RSLAM_gtsam::RSLAM_gtsam() = default;
 
 void RSLAM_gtsam::initialize(const std::string& cfg_block)
 {

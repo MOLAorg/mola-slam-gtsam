@@ -23,11 +23,7 @@
 
 using namespace mola;
 
-ASLAM_gtsam::ASLAM_gtsam()
-{
-    //
-    this->setLoggerName("ASLAM_gtsam");
-}
+ASLAM_gtsam::ASLAM_gtsam() = default;
 
 void ASLAM_gtsam::initialize(const std::string& cfg_block)
 {
