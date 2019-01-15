@@ -14,6 +14,7 @@
 // mrpt includes first:
 #include <mola-kernel/BackEndBase.h>
 // gtsam next:
+#include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 
@@ -48,6 +49,9 @@ class ASLAM_gtsam : public BackEndBase
         /** Pending new elements to add to the map */
         gtsam::NonlinearFactorGraph newfactors;
         gtsam::Values               newvalues;
+
+        // Store as TPose3D to avoid Eigen memory alignment issues:
+        std::map<mola::id_t, mrpt::math::TPose3D> last_kf_estimates;
 
         /** Absolute coordinates single reference frame */
         id_t root_kf_id{mola::INVALID_ID};

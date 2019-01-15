@@ -23,6 +23,23 @@
 
 using namespace mola;
 
+static gtsam::Pose3 toPose3(const mrpt::math::TPose3D& p)
+{
+    gtsam::Pose3                  ret;
+    mrpt::math::CQuaternionDouble q;
+    mrpt::poses::CPose3D(p).getAsQuaternion(q);
+    return gtsam::Pose3(
+        gtsam::Rot3::Quaternion(q.r(), q.x(), q.y(), q.z()),
+        gtsam::Point3(p.x, p.y, p.z));
+}
+
+static mrpt::math::TPose3D toTPose3D(const gtsam::Pose3& p)
+{
+    const auto HM = p.matrix();
+    const auto H  = mrpt::math::CMatrixDouble44(HM);
+    return mrpt::poses::CPose3D(H).asTPose();
+}
+
 ASLAM_gtsam::ASLAM_gtsam() = default;
 
 void ASLAM_gtsam::initialize(const std::string& cfg_block)
@@ -70,10 +87,22 @@ void ASLAM_gtsam::spinOnce()
         state_.newvalues.clear();
     }
 
-    MRPT_TODO("gtsam Values: add print(ostream) method");
-    // MRPT_LOG_DEBUG_STREAM(result.print());
+    if (result.size())
+    {
+        // MRPT_TODO("gtsam Values: add print(ostream) method");
+        // result.print("isam2 result:");
+        MRPT_LOG_DEBUG("iSAM2 new optimization results:");
+        for (auto key_value = result.begin(); key_value != result.end();
+             ++key_value)
+        {
+            const mola::id_t kf_id   = key_value->key;
+            gtsam::Pose3     kf_pose = key_value->value.cast<gtsam::Pose3>();
+            const auto       p       = toTPose3D(kf_pose);
+            state_.last_kf_estimates[kf_id] = p;
 
-    result.print("isam2 result:");
+            MRPT_LOG_DEBUG_STREAM("KF#" << kf_id << ": " << p.asString());
+        }
+    }
 
     MRPT_END
 }
@@ -146,10 +175,16 @@ BackEndBase::AddFactor_Output ASLAM_gtsam::doAddFactor(Factor& newF)
         overloaded{
             [&](const FactorRelativePose3& f) {
                 MRPT_LOG_DEBUG("Adding new FactorRelativePose3");
-                gtsam::Rot3   R;  //= Rot3::Quaternion(qw, qx, qy, qz);
-                gtsam::Point3 t(1.0, 0, 0);
-                gtsam::Pose3  measure(R, t), to_pose_est;  // = fa->rel_pose_
+
+                // Relative pose:
+                const gtsam::Pose3 measure = toPose3(f.rel_pose_);
+
+                // Initial estimation of the new KF:
+                const gtsam::Pose3 to_pose_est =
+                    toPose3(state_.last_kf_estimates[f.from_kf_]);
                 state_.newvalues.insert(f.to_kf_, to_pose_est);
+
+                MRPT_TODO("Actual GTSAM factor ID");
                 newf_id    = 1123;
                 auto noise = gtsam::noiseModel::Isotropic::Sigma(6, 0.1);
                 state_.newfactors
