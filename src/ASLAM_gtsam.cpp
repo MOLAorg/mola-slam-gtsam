@@ -14,6 +14,7 @@
 #include <mola-kernel/variant_helper.h>
 #include <mola-kernel/yaml_helpers.h>
 #include <mola-slam-gtsam/ASLAM_gtsam.h>
+#include <mrpt/opengl/graph_tools.h>  // TODO: Remove after vizmap module
 #include <yaml-cpp/yaml.h>
 
 // GTSAM second:
@@ -66,10 +67,10 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
 
     // Init iSAM2:
     gtsam::ISAM2Params parameters;
-    parameters.relinearizeThreshold   = 0.01;
-    parameters.relinearizeSkip        = 1;
+    // parameters.relinearizeThreshold   = 0.1;
+    // parameters.relinearizeSkip        = 10;
     parameters.cacheLinearizedFactors = false;
-    parameters.enableDetailedResults  = true;
+    parameters.enableDetailedResults  = false;
 
     state_.isam2 = std::make_unique<gtsam::ISAM2>(parameters);
 
@@ -103,25 +104,6 @@ void ASLAM_gtsam::spinOnce()
             state_.newvalues.clear();
         }
     }
-    for (auto keyedStatus : isam2_res.detail->variableStatus)
-    {
-        using std::cout;
-        const auto& status = keyedStatus.second;
-        gtsam::PrintKey(keyedStatus.first);
-        cout << " {"
-             << "\n";
-        cout << "reeliminated: " << status.isReeliminated << "\n";
-        cout << "relinearized above thresh: " << status.isAboveRelinThreshold
-             << "\n";
-        cout << "relinearized involved: " << status.isRelinearizeInvolved
-             << "\n";
-        cout << "relinearized: " << status.isRelinearized << "\n";
-        cout << "observed: " << status.isObserved << "\n";
-        cout << "new: " << status.isNew << "\n";
-        cout << "in the root clique: " << status.inRootClique << "\n";
-        cout << "}"
-             << "\n";
-    }
 
     if (result.size())
     {
@@ -141,12 +123,47 @@ void ASLAM_gtsam::spinOnce()
             gtsam::Pose3     kf_pose = key_value.value.cast<gtsam::Pose3>();
             const auto       p       = toTPose3D(kf_pose);
             state_.last_kf_estimates[kf_id] = p;
+            // mapviz:
+            state_.vizmap.nodes[kf_id] = mrpt::poses::CPose3D(p);
 
-            MRPT_LOG_DEBUG_STREAM("KF#" << kf_id << ": " << p.asString());
+            // MRPT_LOG_DEBUG_STREAM("KF#" << kf_id << ": " << p.asString());
         }
 
         MRPT_TODO("Send to the world model");
     }
+
+    if (isam2_res.detail)
+    {
+        for (auto keyedStatus : isam2_res.detail->variableStatus)
+        {
+            using std::cout;
+            const auto& status = keyedStatus.second;
+            gtsam::PrintKey(keyedStatus.first);
+            cout << " {"
+                 << "\n";
+            cout << "reeliminated: " << status.isReeliminated << "\n";
+            cout << "relinearized above thresh: "
+                 << status.isAboveRelinThreshold << "\n";
+            cout << "relinearized involved: " << status.isRelinearizeInvolved
+                 << "\n";
+            cout << "relinearized: " << status.isRelinearized << "\n";
+            cout << "observed: " << status.isObserved << "\n";
+            cout << "new: " << status.isNew << "\n";
+            cout << "in the root clique: " << status.inRootClique << "\n";
+            cout << "}"
+                 << "\n";
+        }
+    }
+
+    // Show in GUI:
+    // -------------------
+    auto di = std::make_shared<DisplayInfo>();
+    {
+        std::lock_guard<decltype(last_kf_estimates_lock_)> lock(
+            last_kf_estimates_lock_);
+        di->vizmap = state_.vizmap;  // make a copy
+    }
+    gui_updater_pool_.enqueue(&ASLAM_gtsam::doUpdateDisplay, this, di);
 
     MRPT_END
 }
@@ -249,7 +266,7 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
     // Initial estimation of the new KF:
     mrpt::math::TPose3D to_pose_est;
     {
-        std::lock_guard<typeof(last_kf_estimates_lock_)> lock(
+        std::lock_guard<decltype(last_kf_estimates_lock_)> lock(
             last_kf_estimates_lock_);
 
         const auto& from_pose_est = state_.last_kf_estimates[f.from_kf_];
@@ -258,6 +275,10 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
         // Store the result just in case we need it as a quick guess in next
         // factors, before running the actual optimizer:
         state_.last_kf_estimates[f.to_kf_] = to_pose_est;
+        // mapviz:
+        state_.vizmap.nodes[f.to_kf_] = mrpt::poses::CPose3D(to_pose_est);
+        state_.vizmap.insertEdgeAtEnd(
+            f.from_kf_, f.to_kf_, mrpt::poses::CPose3D(to_pose_est));
     }
 
     // Noise model:
@@ -265,7 +286,7 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
     auto noise = gtsam::noiseModel::Isotropic::Sigma(6, 0.1);
 
     {
-        std::lock_guard<typeof(isam2_lock_)> lock(isam2_lock_);
+        std::lock_guard<decltype(isam2_lock_)> lock(isam2_lock_);
         // Add to list of initial guess (if not done already with a former
         // factor):
         if (state_.newvalues.find(f.to_kf_) == state_.newvalues.end())
@@ -278,4 +299,56 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
     return 1123;
 
     MRPT_END
+}
+
+void ASLAM_gtsam::doUpdateDisplay(std::shared_ptr<DisplayInfo> di)
+{
+    try
+    {
+        using namespace mrpt::gui;
+        using namespace mrpt::opengl;
+        using namespace std::string_literals;
+
+        ProfilerEntry tleg(profiler_, "doUpdateDisplay");
+
+        if (!display_)
+        {
+            display_ = CDisplayWindow3D::Create(
+                ExecutableBase::getModuleInstanceName(), 650, 480);
+        }
+
+        mrpt::poses::CPose3D last_kf_pos;
+        if (!di->vizmap.nodes.empty())
+        {
+            // point camera to last KF:
+            last_kf_pos = di->vizmap.nodes.rbegin()->second;
+        }
+
+        {  // lock scene
+            COpenGLScene::Ptr      scene;
+            CDisplayWindow3DLocker lock(*display_, scene);
+
+            // Update scene:
+            scene->clear();
+
+            mrpt::system::TParametersDouble params;
+            params["show_ID_labels"]    = 1;
+            params["show_ground_grid"]  = 1;
+            params["show_edges"]        = 1;
+            params["show_node_corners"] = 1;
+
+            auto gl_graph =
+                mrpt::opengl::graph_tools::graph_visualize(di->vizmap, params);
+
+            scene->insert(gl_graph);
+        }
+        display_->setCameraPointingToPoint(
+            last_kf_pos.x(), last_kf_pos.y(), last_kf_pos.z());
+
+        display_->repaint();
+    }
+    catch (const std::exception& e)
+    {
+        MRPT_LOG_ERROR_STREAM("Exception:\n" << mrpt::exception_to_str(e));
+    }
 }

@@ -26,6 +26,8 @@ mola_configure_library(${PROJECT_NAME})
 
 # find dependencies:
 find_package(mrpt-obs)
+find_package(mrpt-gui) # TODO: Remove! when the gui -> other mapviz module
+find_package(mrpt-graphs) # TODO: Remove! when the gui -> other mapviz module
 
 # Public lib Dependencies:
 target_link_libraries(${PROJECT_NAME}
@@ -44,4 +46,6 @@ target_include_directories(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
   PRIVATE
     mrpt-obs
+    mrpt-gui
+    mrpt-graphs
 )

@@ -13,6 +13,9 @@
 
 // mrpt includes first:
 #include <mola-kernel/BackEndBase.h>
+#include <mola-kernel/WorkerThreadsPool.h>
+#include <mrpt/graphs/CNetworkOfPoses.h>
+#include <mrpt/gui/CDisplayWindow3D.h>
 // gtsam next:
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/ISAM2.h>
@@ -53,6 +56,9 @@ class ASLAM_gtsam : public BackEndBase
         // Store as TPose3D to avoid Eigen memory alignment issues:
         std::map<mola::id_t, mrpt::math::TPose3D> last_kf_estimates;
 
+        // locked by last_kf_estimates_lock_ as well:
+        mrpt::graphs::CNetworkOfPoses3D vizmap;
+
         /** Absolute coordinates single reference frame */
         id_t root_kf_id{mola::INVALID_ID};
     };
@@ -62,6 +68,21 @@ class ASLAM_gtsam : public BackEndBase
     std::recursive_timed_mutex last_kf_estimates_lock_;
 
     fid_t addFactor(const FactorRelativePose3& f);
+
+    // TODO: Temporary code, should be moved to a new module "MapViz":
+    // --------------
+    mola::WorkerThreadsPool gui_updater_pool_{
+        1, mola::WorkerThreadsPool::POLICY_ONLY_LATEST};
+
+    struct DisplayInfo
+    {
+        mrpt::graphs::CNetworkOfPoses3D vizmap;
+    };
+    /** This will be run in a dedicated thread inside gui_updater_pool_ */
+    void doUpdateDisplay(std::shared_ptr<DisplayInfo> di);
+
+    mrpt::gui::CDisplayWindow3D::Ptr display_;
+    // ----------------------------
 };
 
 }  // namespace mola
