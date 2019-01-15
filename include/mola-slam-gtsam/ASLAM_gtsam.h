@@ -72,7 +72,7 @@ class ASLAM_gtsam : public BackEndBase
     // TODO: Temporary code, should be moved to a new module "MapViz":
     // --------------
     mola::WorkerThreadsPool gui_updater_pool_{
-        1, mola::WorkerThreadsPool::POLICY_ONLY_LATEST};
+        1, mola::WorkerThreadsPool::POLICY_DROP_OLD};
 
     struct DisplayInfo
     {
