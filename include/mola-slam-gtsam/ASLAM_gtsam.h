@@ -44,7 +44,7 @@ class ASLAM_gtsam : public BackEndBase
     struct SLAM_state
     {
         /** Incremental estimator */
-        gtsam::ISAM2 isam2;
+        std::unique_ptr<gtsam::ISAM2> isam2;
 
         /** Pending new elements to add to the map */
         gtsam::NonlinearFactorGraph newfactors;
@@ -59,6 +59,9 @@ class ASLAM_gtsam : public BackEndBase
 
     SLAM_state                 state_;
     std::recursive_timed_mutex isam2_lock_;
+    std::recursive_timed_mutex last_kf_estimates_lock_;
+
+    fid_t addFactor(const FactorRelativePose3& f);
 };
 
 }  // namespace mola
