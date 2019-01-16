@@ -45,7 +45,7 @@ target_include_directories(${PROJECT_NAME}
 # Private lib Dependencies:
 target_link_libraries(${PROJECT_NAME}
   PRIVATE
-    mrpt-obs
-    mrpt-gui
-    mrpt-graphs
+    mrpt::obs
+    mrpt::gui
+    mrpt::graphs
 )
