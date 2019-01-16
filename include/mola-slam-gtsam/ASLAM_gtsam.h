@@ -42,6 +42,7 @@ class ASLAM_gtsam : public BackEndBase
     // Impl. if virtual methods. See base class docs:
     ProposeKF_Output doAddKeyFrame(const ProposeKF_Input& i) override;
     AddFactor_Output doAddFactor(Factor& newF) override;
+    bool             doFactorExistsBetween(id_t a, id_t b) override;
 
    private:
     struct SLAM_state
@@ -53,7 +54,10 @@ class ASLAM_gtsam : public BackEndBase
         gtsam::NonlinearFactorGraph newfactors;
         gtsam::Values               newvalues;
 
-        // Store as TPose3D to avoid Eigen memory alignment issues:
+        /** Stored as TPose3D to avoid Eigen memory alignment drawbacks.
+         *  This structure also serves to reflect whether a KF has been already
+         *initialized to an initial guess value, if we are before iSAM2 update()
+         **/
         std::map<mola::id_t, mrpt::math::TPose3D> last_kf_estimates;
 
         // locked by last_kf_estimates_lock_ as well:

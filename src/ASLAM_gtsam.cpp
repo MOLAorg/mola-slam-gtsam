@@ -56,12 +56,8 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
     ENSURE_YAML_ENTRY_EXISTS(cfg, "params");
     auto params = cfg["params"];
 
-    MRPT_TODO("Add priorities to initialize() for the map to be set-up 1st");
-
     // Ensure we have access to the worldmodel:
     ASSERT_(worldmodel_);
-    ASSERT_(worldmodel_->entities_);
-    // ASSERT_(worldmodel_->factors_);
 
     MRPT_TODO("Load existing map from world model?");
 
@@ -177,16 +173,16 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
 
     MRPT_LOG_DEBUG("Creating new KeyFrame");
 
-    // Create entities in the worldmodel:
-    auto& ents = *worldmodel_->entities_;
-    MRPT_TODO("Map lock?");
-
     // If this is the first KF, create an absolute coordinate reference frame in
     // the map:
     if (state_.root_kf_id == INVALID_ID)
     {
         mola::RefPose3 root;
-        state_.root_kf_id = ents.emplace_back(root);
+
+        // Add to the WorldModel
+        worldmodel_->entities_lock();
+        state_.root_kf_id = worldmodel_->entity_push_back(root);
+        worldmodel_->entities_unlock();
 
         // And add a prior to iSAM2:
         auto priorModel = gtsam::noiseModel::Diagonal::Variances(
@@ -217,9 +213,12 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
             new_kf.raw_observations_ =
                 mrpt::obs::CSensoryFrame::Create(i.observations.value());
 
-        // Add to the map:
-        o.new_kf_id = ents.emplace_back(new_kf);
-        o.success   = true;
+        // Add to the WorldModel:
+        worldmodel_->entities_lock();
+        o.new_kf_id = worldmodel_->entity_emplace_back(new_kf);
+        worldmodel_->entities_unlock();
+
+        o.success = true;
         return o;
     }
 
@@ -231,10 +230,6 @@ BackEndBase::AddFactor_Output ASLAM_gtsam::doAddFactor(Factor& newF)
     MRPT_START
     ProfilerEntry    tleg(profiler_, "doAddFactor");
     AddFactor_Output o;
-
-    // Create in the worldmodel:
-    auto& facts = *worldmodel_->factors_;
-    MRPT_TODO("Add to world-model as well");
 
     mola::fid_t fid = INVALID_FID;
 
@@ -260,11 +255,17 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
     MRPT_START
     MRPT_LOG_DEBUG("Adding new FactorRelativePose3");
 
+    // Add to the WorldModel:
+    worldmodel_->factors_lock();
+    const fid_t new_fid = worldmodel_->factor_push_back(f);
+    worldmodel_->factors_unlock();
+
     // Relative pose:
     const gtsam::Pose3 measure = toPose3(f.rel_pose_);
 
     // Initial estimation of the new KF:
     mrpt::math::TPose3D to_pose_est;
+    bool                to_id_observed_first_time = false;
     {
         std::lock_guard<decltype(last_kf_estimates_lock_)> lock(
             last_kf_estimates_lock_);
@@ -274,7 +275,10 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
 
         // Store the result just in case we need it as a quick guess in next
         // factors, before running the actual optimizer:
-        state_.last_kf_estimates[f.to_kf_] = to_pose_est;
+        auto [it, was_new] =
+            state_.last_kf_estimates.insert_or_assign(f.to_kf_, to_pose_est);
+        to_id_observed_first_time = was_new;
+
         // mapviz:
         state_.vizmap.nodes[f.to_kf_] = mrpt::poses::CPose3D(to_pose_est);
         state_.vizmap.insertEdgeAtEnd(
@@ -286,17 +290,26 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
     auto noise = gtsam::noiseModel::Isotropic::Sigma(6, 0.1);
 
     {
+        MRPT_TODO("add a new lock for last_kf_estimates");
         std::lock_guard<decltype(isam2_lock_)> lock(isam2_lock_);
+
         // Add to list of initial guess (if not done already with a former
         // factor):
-        if (state_.newvalues.find(f.to_kf_) == state_.newvalues.end())
-        { state_.newvalues.insert(f.to_kf_, toPose3(to_pose_est)); }
+        if (to_id_observed_first_time)
+            state_.newvalues.insert(f.to_kf_, toPose3(to_pose_est));
+
         state_.newfactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
             f.from_kf_, f.to_kf_, measure, noise);
     }
 
-    MRPT_TODO("Actual GTSAM factor ID");
-    return 1123;
+    return new_fid;
+
+    MRPT_END
+}
+
+bool ASLAM_gtsam::doFactorExistsBetween(id_t a, id_t b)
+{
+    MRPT_START
 
     MRPT_END
 }

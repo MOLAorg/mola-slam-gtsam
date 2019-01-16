@@ -50,18 +50,26 @@ BackEndBase::ProposeKF_Output RSLAM_gtsam::doAddKeyFrame(
 
     MRPT_LOG_DEBUG("Creating new KeyFrame");
 
-    auto& ents = *worldmodel_->entities_;
-
+    // worldmodel_-> ...;
     MRPT_TODO("Continue here!");
-    auto e      = std::make_shared<EntityBase>();
-    o.new_kf_id = ents.emplace_back(e);
-    o.success   = true;
+
+    auto e = std::make_shared<EntityBase>();
+    // o.new_kf_id = ents.emplace_back(e);
+    // o.success = true;
     return o;
 
     MRPT_END
 }
 
 BackEndBase::AddFactor_Output RSLAM_gtsam::doAddFactor(Factor& f)
+{
+    MRPT_START
+
+    THROW_EXCEPTION("Implement me!");
+
+    MRPT_END
+}
+bool RSLAM_gtsam::doFactorExistsBetween(id_t a, id_t b)
 {
     MRPT_START
 
