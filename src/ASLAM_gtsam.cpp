@@ -311,6 +311,8 @@ bool ASLAM_gtsam::doFactorExistsBetween(id_t a, id_t b)
 {
     MRPT_START
 
+    THROW_EXCEPTION("to do!");
+
     MRPT_END
 }
 
