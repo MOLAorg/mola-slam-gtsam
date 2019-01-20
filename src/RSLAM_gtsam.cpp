@@ -77,3 +77,13 @@ bool RSLAM_gtsam::doFactorExistsBetween(id_t a, id_t b)
 
     MRPT_END
 }
+
+void RSLAM_gtsam::doAdvertiseUpdatedLocalization(
+    const AdvertiseUpdatedLocalization_Input& l)
+{
+    MRPT_START
+
+    THROW_EXCEPTION("Implement me!");
+
+    MRPT_END
+}

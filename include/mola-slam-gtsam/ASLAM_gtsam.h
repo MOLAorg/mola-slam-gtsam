@@ -16,6 +16,7 @@
 #include <mola-kernel/WorkerThreadsPool.h>
 #include <mrpt/graphs/CNetworkOfPoses.h>
 #include <mrpt/gui/CDisplayWindow3D.h>
+#include <mrpt/poses/CPose3DInterpolator.h>
 // gtsam next:
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/ISAM2.h>
@@ -43,6 +44,8 @@ class ASLAM_gtsam : public BackEndBase
     ProposeKF_Output doAddKeyFrame(const ProposeKF_Input& i) override;
     AddFactor_Output doAddFactor(Factor& newF) override;
     bool             doFactorExistsBetween(id_t a, id_t b) override;
+    void             doAdvertiseUpdatedLocalization(
+                    const AdvertiseUpdatedLocalization_Input& l) override;
 
    private:
     struct SLAM_state
@@ -59,6 +62,9 @@ class ASLAM_gtsam : public BackEndBase
          *initialized to an initial guess value, if we are before iSAM2 update()
          **/
         std::map<mola::id_t, mrpt::math::TPose3D> last_kf_estimates;
+
+        /** History of vehicle poses over time */
+        mrpt::poses::CPose3DInterpolator trajectory;
 
         // locked by last_kf_estimates_lock_ as well:
         mrpt::graphs::CNetworkOfPoses3D vizmap;

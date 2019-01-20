@@ -24,6 +24,8 @@
 
 using namespace mola;
 
+static const bool SAVE_KITTI_PATH_FILE = true;
+
 static gtsam::Pose3 toPose3(const mrpt::math::TPose3D& p)
 {
     gtsam::Pose3                  ret;
@@ -197,6 +199,22 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
                 state_.root_kf_id, gtsam::Pose3(), priorModel);
         }
 
+        // Initial estimation of the new KF:
+        {
+            std::lock_guard<decltype(last_kf_estimates_lock_)> lock(
+                last_kf_estimates_lock_);
+
+            // Store the result just in case we need it as a quick guess in next
+            // factors, before running the actual optimizer:
+            // auto [it, was_new] =
+            state_.last_kf_estimates.insert_or_assign(
+                state_.root_kf_id, mrpt::math::TPose3D::Identity());
+
+            // mapviz:
+            state_.vizmap.nodes[state_.root_kf_id] =
+                mrpt::poses::CPose3D::Identity();
+        }
+
         // Return:
         o.new_kf_id = state_.root_kf_id;
         o.success   = true;
@@ -312,6 +330,49 @@ bool ASLAM_gtsam::doFactorExistsBetween(id_t a, id_t b)
     MRPT_START
 
     THROW_EXCEPTION("to do!");
+
+    MRPT_END
+}
+
+void ASLAM_gtsam::doAdvertiseUpdatedLocalization(
+    const AdvertiseUpdatedLocalization_Input& l)
+{
+    MRPT_START
+
+    using mrpt::poses::CPose3D;
+
+    CPose3D ref_pose;
+    {
+        std::lock_guard<decltype(last_kf_estimates_lock_)> lock(
+            last_kf_estimates_lock_);
+
+        auto it = state_.last_kf_estimates.find(l.reference_kf);
+        ASSERTMSG_(
+            it != state_.last_kf_estimates.end(), "unknown reference KF");
+
+        ref_pose = CPose3D(it->second);
+    }
+
+    CPose3D cur_global_pose = ref_pose + CPose3D(l.pose);
+    MRPT_LOG_WARN_STREAM(
+        "timestamp=" << std::fixed << mrpt::Clock::toDouble(l.timestamp)
+                     << ". Advertized new pose=" << cur_global_pose.asString());
+
+    // Insert into trajectory path:
+    state_.trajectory.insert(l.timestamp, cur_global_pose.asTPose());
+
+    if (SAVE_KITTI_PATH_FILE)
+    {
+        static std::ofstream f("kitti_path.txt");
+
+        const auto M =
+            cur_global_pose
+                .getHomogeneousMatrixVal<mrpt::math::CMatrixDouble44>();
+
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 4; c++) f << mrpt::format("%f ", M(r, c));
+        f << "\n";
+    }
 
     MRPT_END
 }
