@@ -19,7 +19,9 @@
 #include <yaml-cpp/yaml.h>
 
 // GTSAM second:
-#include <gtsam/geometry/Pose3.h>
+//#include <gtsam/geometry/Pose3.h>
+#include <gtsam/base/Matrix.h>
+#include <gtsam/navigation/NavState.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 
@@ -37,6 +39,13 @@ static gtsam::Pose3 toPose3(const mrpt::math::TPose3D& p)
     return gtsam::Pose3(
         gtsam::Rot3::Quaternion(q.r(), q.x(), q.y(), q.z()),
         gtsam::Point3(p.x, p.y, p.z));
+}
+
+static gtsam::NavState toNavState(const mrpt::math::TPose3D& p)
+{
+    gtsam::Vector3  vel(0, 0, 0);
+    gtsam::NavState ret(toPose3(p), vel);
+    return ret;
 }
 
 static mrpt::math::TPose3D toTPose3D(const gtsam::Pose3& p)
@@ -90,6 +99,125 @@ static mrpt::math::TPose3D getEntityPose(const mola::Entity& e)
     return ret;
     MRPT_TRY_END
 }
+
+namespace gtsam
+{
+/**
+ * Factor for SE(3) between NavState:
+ */
+class BetweenNavStateFactor : public NoiseModelFactor2<NavState, NavState>
+{
+    // Check that VALUE type is a testable Lie group
+    // BOOST_CONCEPT_ASSERT((IsTestable<NavState>));
+    // BOOST_CONCEPT_ASSERT((IsLieGroup<NavState>));
+
+   public:
+    using T = NavState;
+
+   private:
+    using This = BetweenNavStateFactor;
+    using Base = NoiseModelFactor2<NavState, NavState>;
+
+    using Measure = Pose3;
+
+    Measure measured_; /** The measurement */
+
+   public:
+    // shorthand for a smart pointer to a factor
+    using shared_ptr = boost::shared_ptr<BetweenNavStateFactor>;
+
+    /** default constructor - only use for serialization */
+    BetweenNavStateFactor() {}
+
+    /** Constructor */
+    BetweenNavStateFactor(
+        Key key1, Key key2, const Measure& measured,
+        const SharedNoiseModel& model)
+        : Base(model, key1, key2), measured_(measured)
+    {
+    }
+
+    virtual ~BetweenNavStateFactor() {}
+
+    /// @return a deep copy of this factor
+    virtual gtsam::NonlinearFactor::shared_ptr clone() const
+    {
+        return boost::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new This(*this)));
+    }
+
+    /** implement functions needed for Testable */
+
+    /** print */
+    virtual void print(
+        const std::string&  s,
+        const KeyFormatter& keyFormatter = DefaultKeyFormatter) const
+    {
+        std::cout << s << "BetweenNavStateFactor(" << keyFormatter(this->key1())
+                  << "," << keyFormatter(this->key2()) << ")\n";
+        traits<Measure>::Print(measured_, "  measured: ");
+        this->noiseModel_->print("  noise model: ");
+    }
+
+    /** equals */
+    virtual bool equals(
+        const NonlinearFactor& expected, double tol = 1e-9) const
+    {
+        const This* e = dynamic_cast<const This*>(&expected);
+        return e != NULL && Base::equals(*e, tol) &&
+               traits<Measure>::Equals(this->measured_, e->measured_, tol);
+    }
+
+    /** implement functions needed to derive from Factor */
+
+    /** vector of errors */
+    Vector evaluateError(
+        const NavState& p1, const NavState& p2,
+        boost::optional<Matrix&> H1 = boost::none,
+        boost::optional<Matrix&> H2 = boost::none) const override
+    {
+        auto hx = traits<Pose3>::Between(p1.pose(), p2.pose(), H1, H2);  // h(x)
+
+        // manifold equivalent of h(x)-z -> log(z,h(x))
+#ifdef SLOW_BUT_CORRECT_BETWEENFACTOR
+        typename traits<T>::ChartJacobian::Jacobian Hlocal;
+        Vector                                      rval = traits<T>::Local(
+            measured_, hx, boost::none, (H1 || H2) ? &Hlocal : 0);
+        if (H1) *H1 = Hlocal * (*H1);
+        if (H2) *H2 = Hlocal * (*H2);
+        return rval;
+#else
+        return traits<Pose3>::Local(measured_, hx);
+#endif
+    }
+
+    /** return the measured */
+    const Measure& measured() const { return measured_; }
+
+    /** number of variables attached to this factor */
+    std::size_t size() const { return 2; }
+
+   private:
+    /** Serialization function */
+    friend class boost::serialization::access;
+    template <class ARCHIVE>
+    void serialize(ARCHIVE& ar, const unsigned int /*version*/)
+    {
+        ar& boost::serialization::make_nvp(
+            "BetweenNavStateFactor",
+            boost::serialization::base_object<Base>(*this));
+        ar& BOOST_SERIALIZATION_NVP(measured_);
+    }
+
+    // Alignment, see
+    // https://eigen.tuxfamily.org/dox/group__TopicStructHavingEigenMembers.html
+   public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+};
+
+}  // namespace gtsam
+
+// ----------------------------------------------
 
 ASLAM_gtsam::ASLAM_gtsam() = default;
 
@@ -164,8 +292,8 @@ void ASLAM_gtsam::spinOnce()
         for (auto key_value : result)
         {
             const mola::id_t kf_id   = key_value.key;
-            gtsam::Pose3     kf_pose = key_value.value.cast<gtsam::Pose3>();
-            const auto       p       = toTPose3D(kf_pose);
+            gtsam::NavState  kf_pose = key_value.value.cast<gtsam::NavState>();
+            const auto       p       = toTPose3D(kf_pose.pose());
 
             // Dont update the pose of the global reference, fixed to Identity()
             if (kf_id != state_.root_kf_id)
@@ -237,17 +365,26 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
 
         // And add a prior to iSAM2:
         auto priorModel = gtsam::noiseModel::Diagonal::Variances(
-            (gtsam::Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4)
+            (gtsam::Vector(9) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4, 1e-4, 1e-4,
+             1e-4)
                 .finished());
 
         {
             std::lock_guard<decltype(isam2_lock_)> lock(isam2_lock_);
 
             state_.kf_has_value.insert(state_.root_kf_id);
-            state_.newvalues.insert(
-                state_.root_kf_id, gtsam::Pose3::identity());
-            state_.newfactors.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
-                state_.root_kf_id, gtsam::Pose3(), priorModel);
+
+            const gtsam::Rot3 prior_rotation =
+                gtsam::Rot3(Eigen::Matrix3d::Identity());
+            const gtsam::Vector3 prior_pos = gtsam::Vector3(0, 0, 0);
+            const gtsam::Vector3 prior_vel = gtsam::Vector3(0, 0, 0);
+
+            gtsam::NavState state0(prior_rotation, prior_pos, prior_vel);
+
+            state_.newvalues.insert(state_.root_kf_id, state0);
+            state_.newfactors
+                .emplace_shared<gtsam::PriorFactor<gtsam::NavState>>(
+                    state_.root_kf_id, state0, priorModel);
         }
 
         // mapviz:
@@ -350,7 +487,7 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
     }
 
     // Noise model:
-    MRPT_TODO("Shared noise models?");
+    MRPT_TODO("Grab uncertainty from front-end");
     auto noise = gtsam::noiseModel::Isotropic::Sigma(6, 0.1);
 
     {
@@ -362,10 +499,10 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
         if (state_.kf_has_value.count(f.to_kf_) == 0)
         {
             state_.kf_has_value.insert(f.to_kf_);
-            state_.newvalues.insert(f.to_kf_, toPose3(to_pose_est));
+            state_.newvalues.insert(f.to_kf_, toNavState(to_pose_est));
         }
 
-        state_.newfactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
+        state_.newfactors.emplace_shared<gtsam::BetweenNavStateFactor>(
             f.from_kf_, f.to_kf_, measure, noise);
     }
 
