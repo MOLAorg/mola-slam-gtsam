@@ -34,7 +34,6 @@ class RSLAM_gtsam : public BackEndBase
     // Impl. if virtual methods. See base class docs:
     ProposeKF_Output doAddKeyFrame(const ProposeKF_Input& i) override;
     AddFactor_Output doAddFactor(Factor& f) override;
-    bool             doFactorExistsBetween(id_t a, id_t b) override;
     void             doAdvertiseUpdatedLocalization(
                     const AdvertiseUpdatedLocalization_Input& l) override;
 

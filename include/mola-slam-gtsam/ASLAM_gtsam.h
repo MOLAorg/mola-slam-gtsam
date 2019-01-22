@@ -43,7 +43,6 @@ class ASLAM_gtsam : public BackEndBase
     // Impl. if virtual methods. See base class docs:
     ProposeKF_Output doAddKeyFrame(const ProposeKF_Input& i) override;
     AddFactor_Output doAddFactor(Factor& newF) override;
-    bool             doFactorExistsBetween(id_t a, id_t b) override;
     void             doAdvertiseUpdatedLocalization(
                     const AdvertiseUpdatedLocalization_Input& l) override;
 
@@ -62,7 +61,8 @@ class ASLAM_gtsam : public BackEndBase
         mrpt::poses::CPose3DInterpolator trajectory;
 
         // locked by last_kf_estimates_lock_ as well:
-        mrpt::graphs::CNetworkOfPoses3D vizmap;
+        mrpt::graphs::CNetworkOfPoses3D            vizmap;
+        std::map<mola::id_t, mrpt::math::TTwist3D> vizmap_dyn;
 
         /** Absolute coordinates single reference frame */
         id_t root_kf_id{mola::INVALID_ID};
@@ -73,6 +73,10 @@ class ASLAM_gtsam : public BackEndBase
     std::recursive_timed_mutex vizmap_lock_;
 
     fid_t addFactor(const FactorRelativePose3& f);
+    fid_t addFactor(const FactorRelativePose3ConstVel& f);
+
+    fid_t internal_addFactorRelPose(
+        const FactorRelativePose3& f, const bool addDynamicsFactor);
 
     // TODO: Temporary code, should be moved to a new module "MapViz":
     // --------------
