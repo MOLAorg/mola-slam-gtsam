@@ -56,12 +56,7 @@ class ASLAM_gtsam : public BackEndBase
         /** Pending new elements to add to the map */
         gtsam::NonlinearFactorGraph newfactors;
         gtsam::Values               newvalues;
-
-        /** Stored as TPose3D to avoid Eigen memory alignment drawbacks.
-         *  This structure also serves to reflect whether a KF has been already
-         *initialized to an initial guess value, if we are before iSAM2 update()
-         **/
-        std::map<mola::id_t, mrpt::math::TPose3D> last_kf_estimates;
+        std::set<mola::id_t>        kf_has_value;
 
         /** History of vehicle poses over time */
         mrpt::poses::CPose3DInterpolator trajectory;
@@ -75,7 +70,7 @@ class ASLAM_gtsam : public BackEndBase
 
     SLAM_state                 state_;
     std::recursive_timed_mutex isam2_lock_;
-    std::recursive_timed_mutex last_kf_estimates_lock_;
+    std::recursive_timed_mutex vizmap_lock_;
 
     fid_t addFactor(const FactorRelativePose3& f);
 

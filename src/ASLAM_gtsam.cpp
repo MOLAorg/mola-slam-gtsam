@@ -11,6 +11,7 @@
  */
 
 // MRPT headers must come first (due to Eigen plugin)
+#include <mola-kernel/entities/entities-common.h>
 #include <mola-kernel/variant_helper.h>
 #include <mola-kernel/yaml_helpers.h>
 #include <mola-slam-gtsam/ASLAM_gtsam.h>
@@ -25,6 +26,8 @@
 using namespace mola;
 
 static const bool SAVE_KITTI_PATH_FILE = true;
+
+MRPT_TODO("Move all these aux funcs somewhere else");
 
 static gtsam::Pose3 toPose3(const mrpt::math::TPose3D& p)
 {
@@ -41,6 +44,51 @@ static mrpt::math::TPose3D toTPose3D(const gtsam::Pose3& p)
     const auto HM = p.matrix();
     const auto H  = mrpt::math::CMatrixDouble44(HM);
     return mrpt::poses::CPose3D(H).asTPose();
+}
+
+static void updateEntityPose(mola::Entity& e, const mrpt::math::TPose3D& p)
+{
+    MRPT_TRY_START
+    //
+    std::visit(
+        overloaded{
+            [&](RefPose3&) {
+                ASSERTMSG_(
+                    p == mrpt::math::TPose3D::Identity(),
+                    "RefPose3 cannot be assigned a pose != Identity()");
+            },
+            [&](RelDynPose3KF& ee) { ee.relpose_value = p; },
+            [&](RelPose3& ee) { ee.relpose_value = p; },
+            [&](RelPose3KF& ee) { ee.relpose_value = p; },
+            []([[maybe_unused]] auto ee) {
+                throw std::runtime_error(
+                    mrpt::format("[updateEntity] Unknown Entity type!"));
+            },
+        },
+        e);
+    MRPT_TRY_END
+}
+
+static mrpt::math::TPose3D getEntityPose(const mola::Entity& e)
+{
+    MRPT_TRY_START
+    //
+    mrpt::math::TPose3D ret;
+    std::visit(
+        overloaded{
+            [&](const RefPose3&) { ret = mrpt::math::TPose3D::Identity(); },
+            [&](const RelDynPose3KF& ee) { ret = ee.relpose_value; },
+            [&](const RelPose3& ee) { ret = ee.relpose_value; },
+            [&](const RelPose3KF& ee) { ret = ee.relpose_value; },
+            []([[maybe_unused]] auto ee) {
+                throw std::runtime_error(
+                    mrpt::format("[updateEntity] Unknown Entity type!"));
+            },
+        },
+        e);
+
+    return ret;
+    MRPT_TRY_END
 }
 
 ASLAM_gtsam::ASLAM_gtsam() = default;
@@ -105,29 +153,30 @@ void ASLAM_gtsam::spinOnce()
 
     if (result.size())
     {
-        std::lock_guard<decltype(last_kf_estimates_lock_)> lock(
-            last_kf_estimates_lock_);
-
         // MRPT_TODO("gtsam Values: add print(ostream) method");
         // result.print("isam2 result:");
-
         MRPT_LOG_INFO_STREAM(
             "iSAM2 ran for " << result.size() << " variables.");
 
-        MRPT_LOG_DEBUG("iSAM2 new optimization results:");
+        MRPT_TODO("Do it incrementally, so we dont need to send everything");
+        // Send values to the world model:
+        worldmodel_->entities_lock();
         for (auto key_value : result)
         {
             const mola::id_t kf_id   = key_value.key;
             gtsam::Pose3     kf_pose = key_value.value.cast<gtsam::Pose3>();
             const auto       p       = toTPose3D(kf_pose);
-            state_.last_kf_estimates[kf_id] = p;
+
+            // Dont update the pose of the global reference, fixed to Identity()
+            if (kf_id != state_.root_kf_id)
+                updateEntityPose(worldmodel_->entity_by_id(kf_id), p);
+
             // mapviz:
             state_.vizmap.nodes[kf_id] = mrpt::poses::CPose3D(p);
 
             // MRPT_LOG_DEBUG_STREAM("KF#" << kf_id << ": " << p.asString());
         }
-
-        MRPT_TODO("Send to the world model");
+        worldmodel_->entities_unlock();
     }
 
     if (isam2_res.detail)
@@ -157,8 +206,7 @@ void ASLAM_gtsam::spinOnce()
     // -------------------
     auto di = std::make_shared<DisplayInfo>();
     {
-        std::lock_guard<decltype(last_kf_estimates_lock_)> lock(
-            last_kf_estimates_lock_);
+        std::lock_guard<decltype(vizmap_lock_)> lock(vizmap_lock_);
         di->vizmap = state_.vizmap;  // make a copy
     }
     gui_updater_pool_.enqueue(&ASLAM_gtsam::doUpdateDisplay, this, di);
@@ -179,12 +227,13 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
     // the map:
     if (state_.root_kf_id == INVALID_ID)
     {
-        mola::RefPose3 root;
-
         // Add to the WorldModel
-        worldmodel_->entities_lock();
-        state_.root_kf_id = worldmodel_->entity_push_back(root);
-        worldmodel_->entities_unlock();
+        {
+            worldmodel_->entities_lock();
+            mola::RefPose3 root;
+            state_.root_kf_id = worldmodel_->entity_emplace_back(root);
+            worldmodel_->entities_unlock();
+        }
 
         // And add a prior to iSAM2:
         auto priorModel = gtsam::noiseModel::Diagonal::Variances(
@@ -193,24 +242,17 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
 
         {
             std::lock_guard<decltype(isam2_lock_)> lock(isam2_lock_);
+
+            state_.kf_has_value.insert(state_.root_kf_id);
             state_.newvalues.insert(
                 state_.root_kf_id, gtsam::Pose3::identity());
             state_.newfactors.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
                 state_.root_kf_id, gtsam::Pose3(), priorModel);
         }
 
-        // Initial estimation of the new KF:
+        // mapviz:
         {
-            std::lock_guard<decltype(last_kf_estimates_lock_)> lock(
-                last_kf_estimates_lock_);
-
-            // Store the result just in case we need it as a quick guess in next
-            // factors, before running the actual optimizer:
-            // auto [it, was_new] =
-            state_.last_kf_estimates.insert_or_assign(
-                state_.root_kf_id, mrpt::math::TPose3D::Identity());
-
-            // mapviz:
+            std::lock_guard<decltype(vizmap_lock_)> lock(vizmap_lock_);
             state_.vizmap.nodes[state_.root_kf_id] =
                 mrpt::poses::CPose3D::Identity();
         }
@@ -283,28 +325,32 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
 
     // Initial estimation of the new KF:
     mrpt::math::TPose3D to_pose_est;
-    bool                to_id_observed_first_time = false;
+
+    worldmodel_->entities_lock();
+
+    const auto from_pose_est =
+        getEntityPose(worldmodel_->entity_by_id(f.from_kf_));
+    from_pose_est.composePose(f.rel_pose_, to_pose_est);
+
+    // Store the result just in case we need it as a quick guess in next
+    // factors, before running the actual optimizer:
+    // Dont update the pose of the global reference, fixed to Identity()
+    if (f.to_kf_ != state_.root_kf_id)
+        updateEntityPose(worldmodel_->entity_by_id(f.to_kf_), to_pose_est);
+
+    worldmodel_->entities_unlock();
+
+    // mapviz:
     {
-        std::lock_guard<decltype(last_kf_estimates_lock_)> lock(
-            last_kf_estimates_lock_);
+        std::lock_guard<decltype(vizmap_lock_)> lock(vizmap_lock_);
 
-        const auto& from_pose_est = state_.last_kf_estimates[f.from_kf_];
-        from_pose_est.composePose(f.rel_pose_, to_pose_est);
-
-        // Store the result just in case we need it as a quick guess in next
-        // factors, before running the actual optimizer:
-        auto [it, was_new] =
-            state_.last_kf_estimates.insert_or_assign(f.to_kf_, to_pose_est);
-        to_id_observed_first_time = was_new;
-
-        // mapviz:
         state_.vizmap.nodes[f.to_kf_] = mrpt::poses::CPose3D(to_pose_est);
         state_.vizmap.insertEdgeAtEnd(
             f.from_kf_, f.to_kf_, mrpt::poses::CPose3D(to_pose_est));
     }
 
     // Noise model:
-    MRPT_TODO("Shared noise models");
+    MRPT_TODO("Shared noise models?");
     auto noise = gtsam::noiseModel::Isotropic::Sigma(6, 0.1);
 
     {
@@ -313,8 +359,11 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
 
         // Add to list of initial guess (if not done already with a former
         // factor):
-        if (to_id_observed_first_time)
+        if (state_.kf_has_value.count(f.to_kf_) == 0)
+        {
+            state_.kf_has_value.insert(f.to_kf_);
             state_.newvalues.insert(f.to_kf_, toPose3(to_pose_est));
+        }
 
         state_.newfactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
             f.from_kf_, f.to_kf_, measure, noise);
@@ -341,17 +390,13 @@ void ASLAM_gtsam::doAdvertiseUpdatedLocalization(
 
     using mrpt::poses::CPose3D;
 
-    CPose3D ref_pose;
-    {
-        std::lock_guard<decltype(last_kf_estimates_lock_)> lock(
-            last_kf_estimates_lock_);
+#if 0
+    worldmodel_->entities_lock();
 
-        auto it = state_.last_kf_estimates.find(l.reference_kf);
-        ASSERTMSG_(
-            it != state_.last_kf_estimates.end(), "unknown reference KF");
+    const auto    p = getEntityPose(worldmodel_->entity_by_id(l.reference_kf));
+    const CPose3D ref_pose(p);
 
-        ref_pose = CPose3D(it->second);
-    }
+    worldmodel_->entities_unlock();
 
     CPose3D cur_global_pose = ref_pose + CPose3D(l.pose);
     MRPT_LOG_WARN_STREAM(
@@ -360,6 +405,7 @@ void ASLAM_gtsam::doAdvertiseUpdatedLocalization(
 
     // Insert into trajectory path:
     state_.trajectory.insert(l.timestamp, cur_global_pose.asTPose());
+
 
     if (SAVE_KITTI_PATH_FILE)
     {
@@ -373,6 +419,9 @@ void ASLAM_gtsam::doAdvertiseUpdatedLocalization(
             for (int c = 0; c < 4; c++) f << mrpt::format("%f ", M(r, c));
         f << "\n";
     }
+#endif
+
+    MRPT_TODO("notify to all modules subscribed to localization updates");
 
     MRPT_END
 }
