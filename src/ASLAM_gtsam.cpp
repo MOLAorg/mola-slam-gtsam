@@ -20,15 +20,47 @@
 #include <yaml-cpp/yaml.h>
 
 // GTSAM second:
-//#include <gtsam/geometry/Pose3.h>
 #include <gtsam/base/Matrix.h>
+#include <gtsam/inference/Symbol.h>  // X(), V() symbols
 #include <gtsam/navigation/NavState.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 
 using namespace mola;
 
-static const bool SAVE_KITTI_PATH_FILE = true;
+template <class T>
+class LockHelper
+{
+   public:
+    LockHelper(T* l) : l_{l} { l_->lock(); }
+    ~LockHelper()
+    {
+        if (l_) l_->unlock();
+    }
+
+    LockHelper(const LockHelper& o) = delete;
+    LockHelper& operator=(const LockHelper& o) = delete;
+
+    LockHelper(LockHelper&& o) : l_{o.l} { o.l = nullptr; }
+    LockHelper& operator=(LockHelper&& o)
+    {
+        l_  = o.l;
+        o.l = nullptr;
+        return *this;
+    }
+
+   private:
+    T* l_{nullptr};
+};
+
+template <class T>
+LockHelper<T> lockHelper(T& t)
+{
+    return LockHelper<T>(&t);
+}
+
+static const bool SAVE_KITTI_PATH_FILE = false;
 
 MRPT_TODO("Move all these aux funcs somewhere else");
 
@@ -42,13 +74,6 @@ static gtsam::Pose3 toPose3(const mrpt::math::TPose3D& p)
         gtsam::Point3(p.x, p.y, p.z));
 }
 
-static gtsam::NavState toNavState(const mrpt::math::TPose3D& p)
-{
-    gtsam::Vector3  vel(0, 0, 0);
-    gtsam::NavState ret(toPose3(p), vel);
-    return ret;
-}
-
 static mrpt::math::TPose3D toTPose3D(const gtsam::Pose3& p)
 {
     const auto HM = p.matrix();
@@ -56,20 +81,19 @@ static mrpt::math::TPose3D toTPose3D(const gtsam::Pose3& p)
     return mrpt::poses::CPose3D(H).asTPose();
 }
 
-static mrpt::math::TTwist3D toTTwist3D(const gtsam::NavState& x)
+static mrpt::math::TTwist3D toTTwist3D(const gtsam::Velocity3& v)
 {
     mrpt::math::TTwist3D t;
-    t.vx = x.velocity().x();
-    t.vy = x.velocity().y();
-    t.vz = x.velocity().z();
-    // t.wx = x. ...
+    t.vx = v.x();
+    t.vy = v.y();
+    t.vz = v.z();
     return t;
 }
 
-static void updateEntityPose(mola::Entity& e, const gtsam::NavState& x)
+static void updateEntityPose(mola::Entity& e, const gtsam::Pose3& x)
 {
     MRPT_TRY_START
-    const auto p = toTPose3D(x.pose());
+    const auto p = toTPose3D(x);
 
     std::visit(
         overloaded{
@@ -78,12 +102,7 @@ static void updateEntityPose(mola::Entity& e, const gtsam::NavState& x)
                     p == mrpt::math::TPose3D::Identity(),
                     "RefPose3 cannot be assigned a pose != Identity()");
             },
-            [&](RelDynPose3KF& ee) {
-                ee.relpose_value  = p;
-                ee.twist_value.vx = x.velocity().x();
-                ee.twist_value.vy = x.velocity().y();
-                ee.twist_value.vz = x.velocity().z();
-            },
+            [&](RelDynPose3KF& ee) { ee.relpose_value = p; },
             [&](RelPose3& ee) { ee.relpose_value = p; },
             [&](RelPose3KF& ee) { ee.relpose_value = p; },
             []([[maybe_unused]] auto ee) {
@@ -94,11 +113,29 @@ static void updateEntityPose(mola::Entity& e, const gtsam::NavState& x)
         e);
     MRPT_TRY_END
 }
-
-static void updateEntityPose(mola::Entity& e, const mrpt::math::TPose3D& p)
+static void updateEntityVel(mola::Entity& e, const gtsam::Velocity3& v)
 {
-    gtsam::NavState x(toPose3(p), gtsam::Vector3::Zero());
-    updateEntityPose(e, x);
+    MRPT_TRY_START
+
+    std::visit(
+        overloaded{
+            [&](RefPose3&) {
+                THROW_EXCEPTION("RefPose3 cannot be assigned a velocity");
+            },
+            [&](RelDynPose3KF& ee) {
+                ee.twist_value.vx = v.x();
+                ee.twist_value.vy = v.y();
+                ee.twist_value.vz = v.z();
+            },
+            [&](RelPose3& ee) {},
+            [&](RelPose3KF& ee) {},
+            []([[maybe_unused]] auto ee) {
+                throw std::runtime_error(
+                    mrpt::format("[updateEntityPose] Unknown Entity type!"));
+            },
+        },
+        e);
+    MRPT_TRY_END
 }
 
 static mrpt::math::TPose3D getEntityPose(const mola::Entity& e)
@@ -146,146 +183,17 @@ static mrpt::Clock::time_point getEntityTimeStamp(const mola::Entity& e)
 namespace gtsam
 {
 /**
- * Factor for relative SE(3) observations between NavState's
+ * Factor for constant velocity model between two pairs Pose3+Velocity3
  */
-class RelPoseBetweenNavState : public NoiseModelFactor2<NavState, NavState>
+class ConstVelocityFactor
+    : public NoiseModelFactor4<Pose3, Velocity3, Pose3, Velocity3>
 {
    public:
-    using T = NavState;
+    //    using T = NavState;
 
    private:
-    using This = RelPoseBetweenNavState;
-    using Base = NoiseModelFactor2<NavState, NavState>;
-
-    using Measure = Pose3;
-
-    /** The measurement */
-    Measure measured_;
-
-   public:
-    // shorthand for a smart pointer to a factor
-    using shared_ptr = boost::shared_ptr<RelPoseBetweenNavState>;
-
-    /** default constructor - only use for serialization */
-    RelPoseBetweenNavState() {}
-
-    /** Constructor.  */
-    RelPoseBetweenNavState(
-        Key key1, Key key2, const Measure& relPose2wrt1,
-        const SharedNoiseModel& model)
-        : Base(model, key1, key2), measured_(relPose2wrt1)
-    {
-    }
-
-    virtual ~RelPoseBetweenNavState() override = default;
-
-    /// @return a deep copy of this factor
-    virtual gtsam::NonlinearFactor::shared_ptr clone() const override
-    {
-        return boost::static_pointer_cast<gtsam::NonlinearFactor>(
-            gtsam::NonlinearFactor::shared_ptr(new This(*this)));
-    }
-
-    /** implement functions needed for Testable */
-
-    /** print */
-    virtual void print(
-        const std::string&  s,
-        const KeyFormatter& keyFormatter = DefaultKeyFormatter) const override
-    {
-        std::cout << s << "RelPoseBetweenNavState("
-                  << keyFormatter(this->key1()) << ","
-                  << keyFormatter(this->key2()) << ")\n";
-        traits<Measure>::Print(measured_, "  measured: ");
-        this->noiseModel_->print("  noise model: ");
-    }
-
-    /** equals */
-    virtual bool equals(
-        const NonlinearFactor& expected, double tol = 1e-9) const override
-    {
-        const This* e = dynamic_cast<const This*>(&expected);
-        return e != nullptr && Base::equals(*e, tol) &&
-               traits<Measure>::Equals(this->measured_, e->measured_, tol);
-    }
-
-    /** implement functions needed to derive from Factor */
-
-    /** vector of errors */
-    Vector evaluateError(
-        const NavState& p1, const NavState& p2,
-        boost::optional<Matrix&> H1 = boost::none,
-        boost::optional<Matrix&> H2 = boost::none) const override
-    {
-        Matrix H1_p, H2_p;
-        // h(x): relative pose observation:
-        const Pose3 hx =
-            traits<Pose3>::Between(p1.pose(), p2.pose(), H1_p, H2_p);
-
-        Vector6 err;
-        // manifold equivalent of h(x)-z -> log(z,h(x))
-#ifdef SLOW_BUT_CORRECT_BETWEENFACTOR
-        using Hlocal = typename traits<Pose3>::ChartJacobian::Jacobian;
-
-        Vector rval = traits<Pose3>::Local(
-            measured_, hx, boost::none, (H1 || H2) ? &Hlocal : nullptr);
-        if (H1) *H1_1 = Hlocal * (*H1);
-        if (H2) *H1_2 = Hlocal * (*H2);
-        err = rval;
-#else
-        err = traits<Pose3>::Local(measured_, hx);
-#endif
-
-        if (H1)
-        {
-            auto& H1v = H1.value();
-            H1v.zeros(6, 9);
-            H1v.block<6, 6>(0, 0) = H1_p;
-        }
-        if (H2)
-        {
-            auto& H2v = H2.value();
-            H2v.zeros(6, 9);
-            H2v.block<6, 6>(0, 0) = H2_p;
-        }
-
-        return err;
-    }
-
-    /** return the measured */
-    const Measure& measured() const { return measured_; }
-
-    /** number of variables attached to this factor */
-    std::size_t size() const { return 2; }
-
-   private:
-    /** Serialization function */
-    friend class boost::serialization::access;
-    template <class ARCHIVE>
-    void serialize(ARCHIVE& ar, const unsigned int /*version*/)
-    {
-        ar& boost::serialization::make_nvp(
-            "RelPoseBetweenNavState",
-            boost::serialization::base_object<Base>(*this));
-        ar& BOOST_SERIALIZATION_NVP(measured_);
-    }
-
-   public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-};
-
-/**
- * Factor for constant velocity model between NavState's
- */
-class ConstVelocityBetweenNavState
-    : public NoiseModelFactor2<NavState, NavState>
-{
-   public:
-    using T = NavState;
-
-   private:
-    using This = ConstVelocityBetweenNavState;
-    using Base = NoiseModelFactor2<NavState, NavState>;
+    using This = ConstVelocityFactor;
+    using Base = NoiseModelFactor4<Pose3, Velocity3, Pose3, Velocity3>;
 
     using Measure = double;
 
@@ -294,20 +202,20 @@ class ConstVelocityBetweenNavState
 
    public:
     // shorthand for a smart pointer to a factor
-    using shared_ptr = boost::shared_ptr<ConstVelocityBetweenNavState>;
+    using shared_ptr = boost::shared_ptr<ConstVelocityFactor>;
 
     /** default constructor - only use for serialization */
-    ConstVelocityBetweenNavState() {}
+    ConstVelocityFactor() {}
 
     /** Constructor.  */
-    ConstVelocityBetweenNavState(
-        Key key1, Key key2, const double deltaTime,
+    ConstVelocityFactor(
+        Key pose1, Key vel1, Key pose2, Key vel2, const double deltaTime,
         const SharedNoiseModel& model)
-        : Base(model, key1, key2), deltaTime_(deltaTime)
+        : Base(model, pose1, vel1, pose2, vel2), deltaTime_(deltaTime)
     {
     }
 
-    virtual ~ConstVelocityBetweenNavState() override = default;
+    virtual ~ConstVelocityFactor() override = default;
 
     /// @return a deep copy of this factor
     virtual gtsam::NonlinearFactor::shared_ptr clone() const override
@@ -325,7 +233,9 @@ class ConstVelocityBetweenNavState
     {
         std::cout << s << "ConstVelocityBetweenNavState("
                   << keyFormatter(this->key1()) << ","
-                  << keyFormatter(this->key2()) << ")\n";
+                  << keyFormatter(this->key2()) << ","
+                  << keyFormatter(this->key3()) << ","
+                  << keyFormatter(this->key4()) << ")\n";
         traits<double>::Print(deltaTime_, "  deltaTime: ");
         this->noiseModel_->print("  noise model: ");
     }
@@ -343,34 +253,40 @@ class ConstVelocityBetweenNavState
 
     /** vector of errors */
     Vector evaluateError(
-        const NavState& p1, const NavState& p2,
-        boost::optional<Matrix&> H1 = boost::none,
-        boost::optional<Matrix&> H2 = boost::none) const override
+        const Pose3& p1, const Velocity3& v1, const Pose3& p2,
+        const Velocity3& v2, boost::optional<Matrix&> H1 = boost::none,
+        boost::optional<Matrix&> H2 = boost::none,
+        boost::optional<Matrix&> H3 = boost::none,
+        boost::optional<Matrix&> H4 = boost::none) const override
     {
-        // h2(x): constant velocity model
-        const Vector6 err =
-            (Vector6() << Vector3(
-                 p1.position() + deltaTime_ * p1.velocity() - p2.position()),
-             p1.velocity() - p2.velocity())
-                .finished();
+        Vector6 err;
+        err.head<3>() = p1.translation() + v1 * deltaTime_ - p2.translation();
+        err.tail<3>() = v2 - v1;
 
-        // Stack error vectors & Jacobians:
         if (H1)
         {
             auto& H1v = H1.value();
-            H1v.zeros(6, 9);
+            H1v.zeros(6, 6);
             H1v.block<3, 3>(0, 3) = gtsam::I_3x3;
-            H1v.block<3, 3>(0, 6) = deltaTime_ * gtsam::I_3x3;
-
-            H1v.block<3, 3>(3, 6) = gtsam::I_3x3;
         }
         if (H2)
         {
             auto& H2v = H2.value();
-            H2v.zeros(6, 9);
-            H2v.block<3, 3>(0, 0) = -gtsam::I_3x3;
-
-            H2v.block<3, 3>(3, 6) = -gtsam::I_3x3;
+            H2v.resize(6, 3);
+            H2v.block<3, 3>(0, 0) = gtsam::I_3x3 * deltaTime_;
+            H2v.block<3, 3>(3, 0) = -gtsam::I_3x3;
+        }
+        if (H3)
+        {
+            auto& H3v = H3.value();
+            H3v.zeros(6, 6);
+            H3v.block<3, 3>(0, 3) = -gtsam::I_3x3;
+        }
+        if (H4)
+        {
+            auto& H4v = H4.value();
+            H4v.resize(6, 3);
+            H4v.block<3, 3>(3, 0) = gtsam::I_3x3;
         }
 
         return err;
@@ -419,6 +335,13 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
     ENSURE_YAML_ENTRY_EXISTS(cfg, "params");
     auto params = cfg["params"];
 
+    {
+        ENSURE_YAML_ENTRY_EXISTS(params, "state_vector");
+        std::string s = params["state_vector"].as<std::string>();
+        params_.state_vector =
+            mrpt::typemeta::TEnumType<StateVectorType>::name2value(s);
+    }
+
     // Ensure we have access to the worldmodel:
     ASSERT_(worldmodel_);
 
@@ -426,9 +349,9 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
 
     // Init iSAM2:
     gtsam::ISAM2Params parameters;
-    // parameters.relinearizeThreshold   = 0.1;
-    // parameters.relinearizeSkip        = 10;
-    parameters.cacheLinearizedFactors = false;
+    parameters.relinearizeThreshold   = 0.1;
+    parameters.relinearizeSkip        = 10;
+    parameters.cacheLinearizedFactors = true;
     parameters.enableDetailedResults  = false;
 
     state_.isam2 = std::make_unique<gtsam::ISAM2>(parameters);
@@ -441,11 +364,11 @@ void ASLAM_gtsam::spinOnce()
     ProfilerEntry tleg(profiler_, "spinOnce");
 
     // Incremental SAM solution:
-    gtsam::Values result;
-
     gtsam::ISAM2Result isam2_res;
+    gtsam::Values      result;
+
     {
-        std::lock_guard<typeof(isam2_lock_)> lock(isam2_lock_);
+        auto lock = lockHelper(isam2_lock_);
         if (!state_.newfactors.empty())
         {
             {
@@ -458,6 +381,15 @@ void ASLAM_gtsam::spinOnce()
                 result = state_.isam2->calculateEstimate();
             }
 
+            // If we processed a "newvalue" that was the first gross estimate of
+            // a KF, it was not marked as "already existing" in kf_has_value, in
+            // the hope that a Factor arrived before running the optimization.
+            // If that didn't happen, now is the moment to mark it in
+            // "kf_has_value" to avoid iSAM2 to complain about an attempt to
+            // duplicate a symbol:
+            for (const auto p : state_.newvalues)
+                state_.kf_has_value.insert(p.key);
+
             // reset accumulators of new slam factors:
             state_.newfactors = gtsam::NonlinearFactorGraph();
             state_.newvalues.clear();
@@ -467,26 +399,46 @@ void ASLAM_gtsam::spinOnce()
     if (result.size())
     {
         // MRPT_TODO("gtsam Values: add print(ostream) method");
-        // result.print("isam2 result:");
+        result.print("isam2 result:");
         MRPT_LOG_INFO_STREAM(
             "iSAM2 ran for " << result.size() << " variables.");
 
         MRPT_TODO("Do it incrementally, so we dont need to send everything");
+
+        auto lk = lockHelper(keys_map_lock_);
+
         // Send values to the world model:
         worldmodel_->entities_lock();
         for (auto key_value : result)
         {
-            const mola::id_t kf_id    = key_value.key;
-            gtsam::NavState  kf_navst = key_value.value.cast<gtsam::NavState>();
+            if (auto it_kf = state_.gtsam2mola[KF_KEY_POSE].find(key_value.key);
+                it_kf != state_.gtsam2mola[KF_KEY_POSE].end())
+            {
+                const mola::id_t kf_id   = it_kf->second;
+                gtsam::Pose3     kf_pose = key_value.value.cast<gtsam::Pose3>();
 
-            // Dont update the pose of the global reference, fixed to Identity()
-            if (kf_id != state_.root_kf_id)
-                updateEntityPose(worldmodel_->entity_by_id(kf_id), kf_navst);
+                // Dont update the pose of the global reference, fixed to
+                // Identity()
+                if (kf_id != state_.root_kf_id)
+                    updateEntityPose(worldmodel_->entity_by_id(kf_id), kf_pose);
 
-            // mapviz:
-            const auto p               = toTPose3D(kf_navst.pose());
-            state_.vizmap.nodes[kf_id] = mrpt::poses::CPose3D(p);
-            state_.vizmap_dyn[kf_id]   = toTTwist3D(kf_navst);
+                // mapviz:
+                const auto p               = toTPose3D(kf_pose);
+                state_.vizmap.nodes[kf_id] = mrpt::poses::CPose3D(p);
+            }
+            else if (auto it_kf =
+                         state_.gtsam2mola[KF_KEY_VEL].find(key_value.key);
+                     it_kf != state_.gtsam2mola[KF_KEY_VEL].end())
+            {
+                const mola::id_t kf_id = it_kf->second;
+                gtsam::Velocity3 kf_vel =
+                    key_value.value.cast<gtsam::Velocity3>();
+
+                MRPT_TODO("update velocity in worldmodel");
+                state_.vizmap_dyn[kf_id].vx = kf_vel.x();
+                state_.vizmap_dyn[kf_id].vy = kf_vel.y();
+                state_.vizmap_dyn[kf_id].vz = kf_vel.z();
+            }
 
             // MRPT_LOG_DEBUG_STREAM("KF#" << kf_id << ": " << p.asString());
         }
@@ -520,10 +472,202 @@ void ASLAM_gtsam::spinOnce()
     // -------------------
     auto di = std::make_shared<DisplayInfo>();
     {
-        std::lock_guard<decltype(vizmap_lock_)> lock(vizmap_lock_);
+        auto lock  = lockHelper(vizmap_lock_);
         di->vizmap = state_.vizmap;  // make a copy
     }
     gui_updater_pool_.enqueue(&ASLAM_gtsam::doUpdateDisplay, this, di);
+
+    MRPT_END
+}
+
+/** This creates TWO entities:
+ * - The global coordinate reference frame (state_.root_kf_id), and
+ * - The actual first *Keyframe* (with the desired state space model).
+ * It returns the ID of the latter.
+ */
+mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
+{
+    MRPT_START
+
+    // Add to the WorldModel
+    {
+        worldmodel_->entities_lock();
+        mola::RefPose3 root;
+        root.timestamp_   = i.timestamp;
+        state_.root_kf_id = worldmodel_->entity_emplace_back(root);
+        worldmodel_->entities_unlock();
+    }
+
+    // And add a prior to iSAM2:
+    const double prior_std_rot = mrpt::DEG2RAD(0.01);  // [rad]
+    const double prior_std_pos = 1e-4;  // [m]
+    const double prior_std_vel = 0.5;  // [m/s]
+
+    // mapviz:
+    {
+        auto lock = lockHelper(vizmap_lock_);
+        state_.vizmap.nodes[state_.root_kf_id] =
+            mrpt::poses::CPose3D::Identity();
+    }
+
+    // Create gtsam value & prior factor (the global reference KF needs to
+    // be "fixed" in absolute coordinates SLAM!):
+    using namespace gtsam::symbol_shorthand;  // X(), V()
+
+    // We'll insert a prior for the root pose:
+    // and also for the new_id , but that's done indirectly via addFactor() (see
+    // below).
+    state_.kf_has_value.insert(state_.root_kf_id);
+
+    // Next, we can create the actual Key-frame (with observations, etc.)
+    // relative to the global root frame.
+    // We will add a strong "fix" factor between this new KF and the root,
+    // so it shows up attached to the origin of coordinates.
+    auto new_id = internal_addKeyFrame_Regular(i);
+
+    switch (params_.state_vector)
+    {
+        case StateVectorType::SE2:
+            THROW_EXCEPTION("to do!");
+            break;
+        case StateVectorType::DynSE2:
+            THROW_EXCEPTION("to do!");
+            break;
+
+        case StateVectorType::SE3:
+        {
+            // Index map: MOLA worldmodel <-> gtsam
+            const auto key_root    = X(state_.root_kf_id);
+            const auto key_kf_pose = X(new_id);
+            {
+                auto lock = lockHelper(keys_map_lock_);
+                state_.mola2gtsam[state_.root_kf_id][KF_KEY_POSE] = key_root;
+                state_.mola2gtsam[new_id][KF_KEY_POSE]            = key_kf_pose;
+            }
+
+            // Rot, Pos:
+            const auto state0 = gtsam::Pose3::identity();
+
+            const gtsam::Vector6 diag_stds =
+                (gtsam::Vector6() << prior_std_rot * gtsam::ones(3, 1),
+                 prior_std_pos * gtsam::ones(3, 1))
+                    .finished();
+
+            auto lock = lockHelper(isam2_lock_);
+            // RefPose:
+            state_.newvalues.insert(key_root, state0);
+            state_.newfactors.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
+                key_root, state0,
+                gtsam::noiseModel::Diagonal::Sigmas(diag_stds));
+            // First actual KeyFrame:
+            state_.newvalues.insert(key_kf_pose, state0);
+        }
+        break;
+        case StateVectorType::DynSE3:
+        {
+            const auto key_root_pose = X(state_.root_kf_id);
+            const auto key_kf_pose   = X(new_id);
+            const auto key_kf_vel    = V(new_id);
+            {
+                auto lock = lockHelper(keys_map_lock_);
+                state_.mola2gtsam[state_.root_kf_id][KF_KEY_POSE] =
+                    key_root_pose;
+                state_.mola2gtsam[new_id][KF_KEY_POSE] = key_kf_pose;
+                state_.mola2gtsam[new_id][KF_KEY_VEL]  = key_kf_vel;
+            }
+            // Rot, Pos, Vel:
+            const auto           state0 = gtsam::Pose3::identity();
+            const gtsam::Vector3 vel0   = gtsam::Z_3x1;
+
+            const gtsam::Vector6 diag_stds =
+                (gtsam::Vector6() << prior_std_rot * gtsam::ones(3, 1),
+                 prior_std_pos * gtsam::ones(3, 1))
+                    .finished();
+
+            const gtsam::Vector3 vel_stds = prior_std_vel * gtsam::ones(3, 1);
+
+            auto lock = lockHelper(isam2_lock_);
+            // RefPose:
+            state_.newvalues.insert(key_root_pose, state0);
+            state_.newfactors.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
+                key_root_pose, state0,
+                gtsam::noiseModel::Diagonal::Sigmas(diag_stds));
+            // First actual KeyFrame:
+            state_.newvalues.insert(key_kf_pose, state0);
+            state_.newvalues.insert(key_kf_vel, vel0);
+            state_.newfactors
+                .emplace_shared<gtsam::PriorFactor<gtsam::Velocity3>>(
+                    key_kf_vel, vel0,
+                    gtsam::noiseModel::Diagonal::Sigmas(vel_stds));
+        }
+        break;
+        default:
+            THROW_EXCEPTION("Unhandled state vector type");
+    };
+
+    {
+        mola::FactorRelativePose3 f(
+            state_.root_kf_id, new_id, mrpt::math::TPose3D::Identity());
+        f.noise_model_diag_xyz_ = 0.1e-3;
+        f.noise_model_diag_rot_ = mrpt::DEG2RAD(0.001);
+
+        this->addFactor(f);
+    }
+
+    state_.last_created_kf_id = new_id;
+
+    return new_id;
+
+    MRPT_END
+}
+
+mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
+{
+    MRPT_START
+
+    using namespace gtsam::symbol_shorthand;  // X(), V()
+
+    mola::RelPose3KF new_kf;
+    new_kf.base_id_   = state_.root_kf_id;
+    new_kf.timestamp_ = i.timestamp;
+
+    // Copy the raw observations (shallow copy):
+    if (i.observations)
+        new_kf.raw_observations_ =
+            mrpt::obs::CSensoryFrame::Create(i.observations.value());
+
+    // Add to the WorldModel:
+    worldmodel_->entities_lock();
+    const auto new_kf_id = worldmodel_->entity_emplace_back(new_kf);
+    worldmodel_->entities_unlock();
+
+    const gtsam::Key key_kf_pose = X(new_kf_id), key_kf_vel = V(new_kf_id);
+
+    // Let's use the value of the last KF as a gross initial value,
+    // in case no other Factor makes things easier:
+    // Dont add this KF to the list `kf_has_value`, since it's created, but
+    // doesn't have an actual "quality" initial value.
+    if (state_.last_created_kf_id != mola::INVALID_ID)
+    {
+        auto lock = lockHelper(isam2_lock_);
+
+        const gtsam::Key last_pose_key =
+            state_.mola2gtsam.at(state_.last_created_kf_id)[KF_KEY_POSE];
+
+        const auto it_prev = state_.newvalues.find(last_pose_key);
+        if (it_prev != state_.newvalues.end())
+            state_.newvalues.insert(key_kf_pose, it_prev->value);
+    }
+    {
+        auto lock = lockHelper(keys_map_lock_);
+
+        state_.mola2gtsam[new_kf_id][KF_KEY_POSE] = key_kf_pose;
+        state_.mola2gtsam[new_kf_id][KF_KEY_VEL]  = key_kf_vel;
+    }
+
+    state_.last_created_kf_id = new_kf_id;
+
+    return new_kf_id;
 
     MRPT_END
 }
@@ -537,81 +681,22 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
 
     MRPT_LOG_DEBUG("Creating new KeyFrame");
 
-    // If this is the first KF, create an absolute coordinate reference frame in
-    // the map:
+    // If this is the first KF, create an absolute coordinate reference
+    // frame in the map:
     if (state_.root_kf_id == INVALID_ID)
     {
-        // Add to the WorldModel
-        {
-            worldmodel_->entities_lock();
-            mola::RefPose3 root;
-            root.timestamp_   = i.timestamp;
-            state_.root_kf_id = worldmodel_->entity_emplace_back(root);
-            worldmodel_->entities_unlock();
-        }
-
-        // And add a prior to iSAM2:
-        const double prior_std_rot = mrpt::DEG2RAD(0.01);  // [rad]
-        const double prior_std_pos = 1e-4;  // [m]
-        const double prior_std_vel = 0.5;  // [m/s]
-
-        gtsam::Vector diag_stds(9);
-
-        // rotation:
-        diag_stds(0) = diag_stds(1) = diag_stds(2) = prior_std_rot;
-        // position:
-        diag_stds(3) = diag_stds(4) = diag_stds(5) = prior_std_pos;
-        // velocity:
-        diag_stds(6) = diag_stds(7) = diag_stds(8) = prior_std_vel;
-
-        auto priorModel = gtsam::noiseModel::Diagonal::Sigmas(diag_stds);
-
-        {
-            std::lock_guard<decltype(isam2_lock_)> lock(isam2_lock_);
-
-            state_.kf_has_value.insert(state_.root_kf_id);
-
-            const gtsam::Rot3 prior_rotation =
-                gtsam::Rot3(Eigen::Matrix3d::Identity());
-            const gtsam::Vector3 prior_pos = gtsam::Vector3(0, 0, 0);
-            const gtsam::Vector3 prior_vel = gtsam::Vector3(0, 0, 0);
-
-            gtsam::NavState state0(prior_rotation, prior_pos, prior_vel);
-
-            state_.newvalues.insert(state_.root_kf_id, state0);
-            state_.newfactors
-                .emplace_shared<gtsam::PriorFactor<gtsam::NavState>>(
-                    state_.root_kf_id, state0, priorModel);
-        }
-
-        // mapviz:
-        {
-            std::lock_guard<decltype(vizmap_lock_)> lock(vizmap_lock_);
-            state_.vizmap.nodes[state_.root_kf_id] =
-                mrpt::poses::CPose3D::Identity();
-        }
-
-        // Return:
-        o.new_kf_id = state_.root_kf_id;
+        o.new_kf_id = internal_addKeyFrame_Root(i);
         o.success   = true;
         return o;
     }
     else
     {
         // Regular KF:
-        mola::RelPose3KF new_kf;
-        new_kf.base_id_   = state_.root_kf_id;
-        new_kf.timestamp_ = i.timestamp;
+        o.new_kf_id = internal_addKeyFrame_Regular(i);
 
-        // Copy the raw observations (shallow copy):
-        if (i.observations)
-            new_kf.raw_observations_ =
-                mrpt::obs::CSensoryFrame::Create(i.observations.value());
-
-        // Add to the WorldModel:
-        worldmodel_->entities_lock();
-        o.new_kf_id = worldmodel_->entity_emplace_back(new_kf);
-        worldmodel_->entities_unlock();
+        // No need to add anything else to the gtsam graph.
+        // A keyframe will be added when the first factor involving that KF
+        // is created.
 
         o.success = true;
         return o;
@@ -692,13 +777,14 @@ fid_t ASLAM_gtsam::internal_addFactorRelPose(
     // factors, before running the actual optimizer:
     // Dont update the pose of the global reference, fixed to Identity()
     if (f.to_kf_ != state_.root_kf_id)
-        updateEntityPose(worldmodel_->entity_by_id(f.to_kf_), to_pose_est);
+        updateEntityPose(
+            worldmodel_->entity_by_id(f.to_kf_), toPose3(to_pose_est));
 
     worldmodel_->entities_unlock();
 
     // mapviz:
     {
-        std::lock_guard<decltype(vizmap_lock_)> lock(vizmap_lock_);
+        auto lock = lockHelper(vizmap_lock_);
 
         state_.vizmap.nodes[f.to_kf_] = mrpt::poses::CPose3D(to_pose_est);
         state_.vizmap.insertEdgeAtEnd(
@@ -716,55 +802,82 @@ fid_t ASLAM_gtsam::internal_addFactorRelPose(
          std_xyz)
             .finished());
 
+    auto lock = lockHelper(isam2_lock_);
+
+    const auto to_pose_key   = state_.mola2gtsam.at(f.to_kf_)[KF_KEY_POSE];
+    const auto from_pose_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_POSE];
+
+    // Add to list of initial guess (if not done already with a former
+    // factor):
+    if (state_.kf_has_value.count(f.to_kf_) == 0)
     {
-        std::lock_guard<decltype(isam2_lock_)> lock(isam2_lock_);
+        const gtsam::Pose3 p_to_pose_est = toPose3(to_pose_est);
+        if (!state_.newvalues.exists(to_pose_key))
+            state_.newvalues.insert(to_pose_key, p_to_pose_est);
+        else
+            state_.newvalues.update(to_pose_key, p_to_pose_est);
 
-        // Add to list of initial guess (if not done already with a former
-        // factor):
-        if (state_.kf_has_value.count(f.to_kf_) == 0)
+        state_.kf_has_value.insert(f.to_kf_);
+    }
+
+    // Add relative pose factor:
+    switch (params_.state_vector)
+    {
+        case StateVectorType::SE2:
+            THROW_EXCEPTION("to do!");
+            break;
+        case StateVectorType::DynSE2:
+            THROW_EXCEPTION("to do!");
+            break;
+
+        case StateVectorType::SE3:
+        case StateVectorType::DynSE3:
+            state_.newfactors
+                .emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
+                    from_pose_key, to_pose_key, measure, noise_relpose);
+            break;
+        default:
+            THROW_EXCEPTION("Unhandled state vector type");
+    };
+
+    if (addDynamicsFactor && params_.state_vector == StateVectorType::DynSE3)
+    {
+        const double dt = mrpt::system::timeDifference(from_tim, to_tim);
+        ASSERT_(dt > 0);
+
+        const auto to_vel_key   = state_.mola2gtsam.at(f.to_kf_)[KF_KEY_VEL];
+        const auto from_vel_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_VEL];
+
+        // 0-2: uncertainty in velocity vector (constant velocity
+        // assumption)
+        // TODO: 3-5 ditto, rotvel
+
+        // errors in constant vel:
+        const double n_accel = 0.5;  // [m/s^2]
+        const double n_vel   = 0.20;  // [m/s]
+        const double n_pos   = 0.10;  // [m]
+
+        const double std_pos = n_pos;
+        const double std_vel = n_vel + n_accel * dt;
+
+        const gtsam::Vector6 diag_stds = (gtsam::Vector6() << std_pos, std_pos,
+                                          std_pos, std_vel, std_vel, std_vel)
+                                             .finished();
+
+        auto noise_velModel = gtsam::noiseModel::Diagonal::Sigmas(diag_stds);
+
+        if (dt > 10.0)
         {
-            state_.kf_has_value.insert(f.to_kf_);
-            state_.newvalues.insert(f.to_kf_, toNavState(to_pose_est));
+            MRPT_LOG_WARN_FMT(
+                "A constant-time velocity factor has been added for KFs "
+                "too far-away in time: dT=%.03f s. Adding it, anyway, as "
+                "requested.",
+                dt);
         }
 
-        state_.newfactors.emplace_shared<gtsam::RelPoseBetweenNavState>(
-            f.from_kf_, f.to_kf_, measure, noise_relpose);
-
-        if (addDynamicsFactor)
-        {
-            const double dt = mrpt::system::timeDifference(from_tim, to_tim);
-
-            // 0-2: uncertainty in velocity vector (constant velocity
-            // assumption)
-            // TODO: 3-5 ditto, rotvel
-
-            // error in position:
-            const double noise_std_pos = 1.0 + 0.1 * dt;
-            // error in constant vel:
-            const double noise_std_vel = 1.0 + 0.5 * dt;
-
-            const gtsam::Vector6 diag_stds =
-                (gtsam::Vector6() << noise_std_pos, noise_std_pos,
-                 noise_std_pos, noise_std_vel, noise_std_vel, noise_std_vel)
-                    .finished();
-
-            auto noise_velModel =
-                gtsam::noiseModel::Diagonal::Sigmas(diag_stds);
-
-            if (dt > 10.0)
-            {
-                MRPT_LOG_WARN_FMT(
-                    "Disabling the addition of a constant-time velocity factor "
-                    "for KFs too far-away in time: dT=%.03f s",
-                    dt);
-            }
-            else
-            {
-                state_.newfactors
-                    .emplace_shared<gtsam::ConstVelocityBetweenNavState>(
-                        f.from_kf_, f.to_kf_, dt, noise_velModel);
-            }
-        }
+        state_.newfactors.emplace_shared<gtsam::ConstVelocityFactor>(
+            from_pose_key, from_vel_key, to_pose_key, to_vel_key, dt,
+            noise_velModel);
     }
 
     return new_fid;

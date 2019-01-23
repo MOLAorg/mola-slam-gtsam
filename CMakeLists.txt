@@ -24,6 +24,8 @@ add_library(${PROJECT_NAME} SHARED
 mola_set_target_build_options(${PROJECT_NAME})
 mola_configure_library(${PROJECT_NAME})
 
+target_compile_options(${PROJECT_NAME} PRIVATE "-Wno-shadow" "-Wno-unused-parameter")
+
 # find dependencies:
 find_package(mrpt-obs)
 find_package(mrpt-gui) # TODO: Remove! when the gui -> other mapviz module
