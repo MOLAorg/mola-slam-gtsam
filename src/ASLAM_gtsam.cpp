@@ -330,17 +330,19 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
     MRPT_LOG_DEBUG_STREAM("Initializing with these params:\n" << cfg_block);
 
     // Mandatory parameters:
-    auto cfg = YAML::Load(cfg_block);
+    auto c = YAML::Load(cfg_block);
 
-    ENSURE_YAML_ENTRY_EXISTS(cfg, "params");
-    auto params = cfg["params"];
+    ENSURE_YAML_ENTRY_EXISTS(c, "params");
+    auto cfg = c["params"];
 
     {
-        ENSURE_YAML_ENTRY_EXISTS(params, "state_vector");
-        std::string s = params["state_vector"].as<std::string>();
+        ENSURE_YAML_ENTRY_EXISTS(cfg, "state_vector");
+        std::string s = cfg["state_vector"].as<std::string>();
         params_.state_vector =
             mrpt::typemeta::TEnumType<StateVectorType>::name2value(s);
     }
+
+    YAML_LOAD_REQ(params_, use_incremental_solver, bool);
 
     // Ensure we have access to the worldmodel:
     ASSERT_(worldmodel_);
@@ -348,13 +350,16 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
     MRPT_TODO("Load existing map from world model?");
 
     // Init iSAM2:
-    gtsam::ISAM2Params parameters;
-    parameters.relinearizeThreshold   = 0.1;
-    parameters.relinearizeSkip        = 10;
-    parameters.cacheLinearizedFactors = true;
-    parameters.enableDetailedResults  = false;
+    if (params_.use_incremental_solver)
+    {
+        gtsam::ISAM2Params parameters;
+        parameters.relinearizeThreshold   = 0.1;
+        parameters.relinearizeSkip        = 2;
+        parameters.cacheLinearizedFactors = false;  // true;
+        parameters.enableDetailedResults  = false;
 
-    state_.isam2 = std::make_unique<gtsam::ISAM2>(parameters);
+        state_.isam2 = std::make_unique<gtsam::ISAM2>(parameters);
+    }
 
     MRPT_END
 }
@@ -363,10 +368,12 @@ void ASLAM_gtsam::spinOnce()
     MRPT_START
     ProfilerEntry tleg(profiler_, "spinOnce");
 
+    gtsam::Values result;
+
     // Incremental SAM solution:
     gtsam::ISAM2Result isam2_res;
-    gtsam::Values      result;
 
+    if (params_.use_incremental_solver)
     {
         auto lock = lockHelper(isam2_lock_);
         if (!state_.newfactors.empty())
@@ -378,7 +385,8 @@ void ASLAM_gtsam::spinOnce()
 
             {
                 ProfilerEntry tle(profiler_, "spinOnce.isam2_calcEstimate");
-                result = state_.isam2->calculateEstimate();
+                // result = state_.isam2->calculateEstimate();
+                result = state_.isam2->calculateBestEstimate();
             }
 
             // If we processed a "newvalue" that was the first gross estimate of
@@ -394,6 +402,21 @@ void ASLAM_gtsam::spinOnce()
             state_.newfactors = gtsam::NonlinearFactorGraph();
             state_.newvalues.clear();
         }
+    }
+    else
+    {
+        auto lock = lockHelper(isam2_lock_);
+        if (!state_.newfactors.empty())
+        {
+            ProfilerEntry tle(
+                profiler_, "spinOnce.LevenbergMarquardtOptimizer");
+
+            gtsam::LevenbergMarquardtOptimizer optimizer(
+                state_.newfactors, state_.newvalues);
+            result = optimizer.optimize();
+        }
+
+        state_.newvalues = result;
     }
 
     if (result.size())
@@ -521,6 +544,8 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
     // below).
     state_.kf_has_value.insert(state_.root_kf_id);
 
+    mola2gtsam_register_new_kf(state_.root_kf_id);
+
     // Next, we can create the actual Key-frame (with observations, etc.)
     // relative to the global root frame.
     // We will add a strong "fix" factor between this new KF and the root,
@@ -541,11 +566,6 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
             // Index map: MOLA worldmodel <-> gtsam
             const auto key_root    = X(state_.root_kf_id);
             const auto key_kf_pose = X(new_id);
-            {
-                auto lock = lockHelper(keys_map_lock_);
-                state_.mola2gtsam[state_.root_kf_id][KF_KEY_POSE] = key_root;
-                state_.mola2gtsam[new_id][KF_KEY_POSE]            = key_kf_pose;
-            }
 
             // Rot, Pos:
             const auto state0 = gtsam::Pose3::identity();
@@ -570,13 +590,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
             const auto key_root_pose = X(state_.root_kf_id);
             const auto key_kf_pose   = X(new_id);
             const auto key_kf_vel    = V(new_id);
-            {
-                auto lock = lockHelper(keys_map_lock_);
-                state_.mola2gtsam[state_.root_kf_id][KF_KEY_POSE] =
-                    key_root_pose;
-                state_.mola2gtsam[new_id][KF_KEY_POSE] = key_kf_pose;
-                state_.mola2gtsam[new_id][KF_KEY_VEL]  = key_kf_vel;
-            }
+
             // Rot, Pos, Vel:
             const auto           state0 = gtsam::Pose3::identity();
             const gtsam::Vector3 vel0   = gtsam::Z_3x1;
@@ -616,6 +630,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
         this->addFactor(f);
     }
 
+    mola2gtsam_register_new_kf(new_id);
     state_.last_created_kf_id = new_id;
 
     return new_id;
@@ -659,14 +674,18 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
         const auto it_prev = state_.newvalues.find(last_pose_key);
         if (it_prev != state_.newvalues.end())
         {
-            // Init pose:
-            state_.newvalues.insert(key_kf_pose, it_prev->value);
-
-            // Init vel (if applicable):
+            // Init values:
             switch (params_.state_vector)
             {
+                case StateVectorType::SE3:
+                {
+                    state_.newvalues.insert(key_kf_pose, it_prev->value);
+                }
+                break;
                 case StateVectorType::DynSE3:
                 {
+                    state_.newvalues.insert(key_kf_pose, it_prev->value);
+
                     const gtsam::Vector3 vel0 = gtsam::Z_3x1;
                     state_.newvalues.insert(key_kf_vel, vel0);
                 }
@@ -678,17 +697,13 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
                 break;
 
                 default:
+                    THROW_EXCEPTION("TODO");
                     break;
             };
         }
     }
-    {
-        auto lock = lockHelper(keys_map_lock_);
 
-        state_.mola2gtsam[new_kf_id][KF_KEY_POSE] = key_kf_pose;
-        state_.mola2gtsam[new_kf_id][KF_KEY_VEL]  = key_kf_vel;
-    }
-
+    mola2gtsam_register_new_kf(new_kf_id);
     state_.last_created_kf_id = new_kf_id;
 
     return new_kf_id;
@@ -1053,4 +1068,20 @@ void ASLAM_gtsam::doUpdateDisplay(std::shared_ptr<DisplayInfo> di)
     {
         MRPT_LOG_ERROR_STREAM("Exception:\n" << mrpt::exception_to_str(e));
     }
+}
+
+void ASLAM_gtsam::mola2gtsam_register_new_kf(const mola::id_t kf_id)
+{
+    using namespace gtsam::symbol_shorthand;  // X(), V()
+
+    const auto pose_key = X(kf_id);
+    const auto vel_key  = V(kf_id);
+
+    auto lock = lockHelper(keys_map_lock_);
+
+    state_.mola2gtsam[kf_id][KF_KEY_POSE] = pose_key;
+    state_.mola2gtsam[kf_id][KF_KEY_VEL]  = vel_key;
+
+    state_.gtsam2mola[KF_KEY_POSE][pose_key] = kf_id;
+    state_.gtsam2mola[KF_KEY_VEL][vel_key]   = kf_id;
 }

@@ -54,6 +54,8 @@ class ASLAM_gtsam : public BackEndBase
     struct Parameters
     {
         StateVectorType state_vector{StateVectorType::Undefined};
+
+        bool use_incremental_solver{true};
     };
 
     Parameters params_;
@@ -120,6 +122,8 @@ class ASLAM_gtsam : public BackEndBase
 
     mola::id_t internal_addKeyFrame_Root(const ProposeKF_Input& i);
     mola::id_t internal_addKeyFrame_Regular(const ProposeKF_Input& i);
+
+    void mola2gtsam_register_new_kf(const mola::id_t kf_id);
 
     // TODO: Temporary code, should be moved to a new module "MapViz":
     // --------------
