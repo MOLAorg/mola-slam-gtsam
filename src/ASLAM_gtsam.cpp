@@ -399,7 +399,9 @@ void ASLAM_gtsam::spinOnce()
     if (result.size())
     {
         // MRPT_TODO("gtsam Values: add print(ostream) method");
-        result.print("isam2 result:");
+        if (this->isLoggingLevelVisible(mrpt::system::LVL_DEBUG))
+            result.print("isam2 result:");
+
         MRPT_LOG_INFO_STREAM(
             "iSAM2 ran for " << result.size() << " variables.");
 
@@ -434,13 +436,13 @@ void ASLAM_gtsam::spinOnce()
                 gtsam::Velocity3 kf_vel =
                     key_value.value.cast<gtsam::Velocity3>();
 
-                MRPT_TODO("update velocity in worldmodel");
+                // worldmodel:
+                updateEntityVel(worldmodel_->entity_by_id(kf_id), kf_vel);
+                // mapviz:
                 state_.vizmap_dyn[kf_id].vx = kf_vel.x();
                 state_.vizmap_dyn[kf_id].vy = kf_vel.y();
                 state_.vizmap_dyn[kf_id].vz = kf_vel.z();
             }
-
-            // MRPT_LOG_DEBUG_STREAM("KF#" << kf_id << ": " << p.asString());
         }
         worldmodel_->entities_unlock();
     }
@@ -656,7 +658,29 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
 
         const auto it_prev = state_.newvalues.find(last_pose_key);
         if (it_prev != state_.newvalues.end())
+        {
+            // Init pose:
             state_.newvalues.insert(key_kf_pose, it_prev->value);
+
+            // Init vel (if applicable):
+            switch (params_.state_vector)
+            {
+                case StateVectorType::DynSE3:
+                {
+                    const gtsam::Vector3 vel0 = gtsam::Z_3x1;
+                    state_.newvalues.insert(key_kf_vel, vel0);
+                }
+                break;
+                case StateVectorType::DynSE2:
+                {
+                    THROW_EXCEPTION("TODO");
+                }
+                break;
+
+                default:
+                    break;
+            };
+        }
     }
     {
         auto lock = lockHelper(keys_map_lock_);
@@ -806,6 +830,9 @@ fid_t ASLAM_gtsam::internal_addFactorRelPose(
 
     const auto to_pose_key   = state_.mola2gtsam.at(f.to_kf_)[KF_KEY_POSE];
     const auto from_pose_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_POSE];
+    // (vel keys may be used or not; declare here for convenience anyway)
+    const auto to_vel_key   = state_.mola2gtsam.at(f.to_kf_)[KF_KEY_VEL];
+    const auto from_vel_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_VEL];
 
     // Add to list of initial guess (if not done already with a former
     // factor):
@@ -816,6 +843,28 @@ fid_t ASLAM_gtsam::internal_addFactorRelPose(
             state_.newvalues.insert(to_pose_key, p_to_pose_est);
         else
             state_.newvalues.update(to_pose_key, p_to_pose_est);
+
+        // Init vel (if applicable):
+        switch (params_.state_vector)
+        {
+            case StateVectorType::DynSE3:
+            {
+                const gtsam::Vector3 vel0 = gtsam::Z_3x1;
+                if (!state_.newvalues.exists(to_vel_key))
+                    state_.newvalues.insert(to_vel_key, vel0);
+                else
+                    state_.newvalues.update(to_vel_key, vel0);
+            }
+            break;
+            case StateVectorType::DynSE2:
+            {
+                THROW_EXCEPTION("TODO");
+            }
+            break;
+
+            default:
+                break;
+        };
 
         state_.kf_has_value.insert(f.to_kf_);
     }
@@ -844,9 +893,6 @@ fid_t ASLAM_gtsam::internal_addFactorRelPose(
     {
         const double dt = mrpt::system::timeDifference(from_tim, to_tim);
         ASSERT_(dt > 0);
-
-        const auto to_vel_key   = state_.mola2gtsam.at(f.to_kf_)[KF_KEY_VEL];
-        const auto from_vel_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_VEL];
 
         // 0-2: uncertainty in velocity vector (constant velocity
         // assumption)
