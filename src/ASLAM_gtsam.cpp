@@ -60,7 +60,7 @@ LockHelper<T> lockHelper(T& t)
     return LockHelper<T>(&t);
 }
 
-static const bool SAVE_KITTI_PATH_FILE = false;
+static const bool SAVE_KITTI_PATH_FILE = true;
 
 MRPT_TODO("Move all these aux funcs somewhere else");
 
@@ -395,8 +395,19 @@ void ASLAM_gtsam::spinOnce()
             // If that didn't happen, now is the moment to mark it in
             // "kf_has_value" to avoid iSAM2 to complain about an attempt to
             // duplicate a symbol:
-            for (const auto p : state_.newvalues)
-                state_.kf_has_value.insert(p.key);
+            {
+                auto lk = lockHelper(keys_map_lock_);
+
+                for (const auto p : state_.newvalues)
+                {
+                    if (auto it_kf = state_.gtsam2mola[KF_KEY_POSE].find(p.key);
+                        it_kf != state_.gtsam2mola[KF_KEY_POSE].end())
+                    {
+                        const mola::id_t kf_id = it_kf->second;
+                        state_.kf_has_value.insert(kf_id);
+                    }
+                }
+            }
 
             // reset accumulators of new slam factors:
             state_.newfactors = gtsam::NonlinearFactorGraph();
@@ -433,7 +444,7 @@ void ASLAM_gtsam::spinOnce()
         auto lk = lockHelper(keys_map_lock_);
 
         // Send values to the world model:
-        worldmodel_->entities_lock();
+        worldmodel_->entities_lock_for_write();
         for (auto key_value : result)
         {
             if (auto it_kf = state_.gtsam2mola[KF_KEY_POSE].find(key_value.key);
@@ -467,7 +478,7 @@ void ASLAM_gtsam::spinOnce()
                 state_.vizmap_dyn[kf_id].vz = kf_vel.z();
             }
         }
-        worldmodel_->entities_unlock();
+        worldmodel_->entities_unlock_for_write();
     }
 
     if (isam2_res.detail)
@@ -509,6 +520,7 @@ void ASLAM_gtsam::spinOnce()
  * - The global coordinate reference frame (state_.root_kf_id), and
  * - The actual first *Keyframe* (with the desired state space model).
  * It returns the ID of the latter.
+ * isam2_lock_ is locked from the caller site.
  */
 mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
 {
@@ -516,11 +528,11 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
 
     // Add to the WorldModel
     {
-        worldmodel_->entities_lock();
+        worldmodel_->entities_lock_for_write();
         mola::RefPose3 root;
         root.timestamp_   = i.timestamp;
         state_.root_kf_id = worldmodel_->entity_emplace_back(root);
-        worldmodel_->entities_unlock();
+        worldmodel_->entities_unlock_for_write();
     }
 
     // And add a prior to iSAM2:
@@ -575,7 +587,6 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
                  prior_std_pos * gtsam::ones(3, 1))
                     .finished();
 
-            auto lock = lockHelper(isam2_lock_);
             // RefPose:
             state_.newvalues.insert(key_root, state0);
             state_.newfactors.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
@@ -602,7 +613,6 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
 
             const gtsam::Vector3 vel_stds = prior_std_vel * gtsam::ones(3, 1);
 
-            auto lock = lockHelper(isam2_lock_);
             // RefPose:
             state_.newvalues.insert(key_root_pose, state0);
             state_.newfactors.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
@@ -638,6 +648,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
     MRPT_END
 }
 
+// isam2_lock_ is locked from the caller site.
 mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
 {
     MRPT_START
@@ -654,9 +665,9 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
             mrpt::obs::CSensoryFrame::Create(i.observations.value());
 
     // Add to the WorldModel:
-    worldmodel_->entities_lock();
+    worldmodel_->entities_lock_for_write();
     const auto new_kf_id = worldmodel_->entity_emplace_back(new_kf);
-    worldmodel_->entities_unlock();
+    worldmodel_->entities_unlock_for_write();
 
     const gtsam::Key key_kf_pose = X(new_kf_id), key_kf_vel = V(new_kf_id);
 
@@ -666,8 +677,6 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
     // doesn't have an actual "quality" initial value.
     if (state_.last_created_kf_id != mola::INVALID_ID)
     {
-        auto lock = lockHelper(isam2_lock_);
-
         const gtsam::Key last_pose_key =
             state_.mola2gtsam.at(state_.last_created_kf_id)[KF_KEY_POSE];
 
@@ -720,6 +729,8 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
 
     MRPT_LOG_DEBUG("Creating new KeyFrame");
 
+    auto lock = lockHelper(isam2_lock_);
+
     // If this is the first KF, create an absolute coordinate reference
     // frame in the map:
     if (state_.root_kf_id == INVALID_ID)
@@ -749,6 +760,8 @@ BackEndBase::AddFactor_Output ASLAM_gtsam::doAddFactor(Factor& newF)
     MRPT_START
     ProfilerEntry    tleg(profiler_, "doAddFactor");
     AddFactor_Output o;
+
+    auto lock = lockHelper(isam2_lock_);
 
     mola::fid_t fid = INVALID_FID;
 
@@ -791,9 +804,9 @@ fid_t ASLAM_gtsam::internal_addFactorRelPose(
     MRPT_START
 
     // Add to the WorldModel:
-    worldmodel_->factors_lock();
+    worldmodel_->factors_lock_for_write();
     const fid_t new_fid = worldmodel_->factor_push_back(f);
-    worldmodel_->factors_unlock();
+    worldmodel_->factors_unlock_for_write();
 
     // Relative pose:
     const gtsam::Pose3 measure = toPose3(f.rel_pose_);
@@ -801,7 +814,7 @@ fid_t ASLAM_gtsam::internal_addFactorRelPose(
     // Initial estimation of the new KF:
     mrpt::math::TPose3D to_pose_est;
 
-    worldmodel_->entities_lock();
+    worldmodel_->entities_lock_for_write();
 
     const auto& kf_from = worldmodel_->entity_by_id(f.from_kf_);
     const auto& kf_to   = worldmodel_->entity_by_id(f.to_kf_);
@@ -819,7 +832,7 @@ fid_t ASLAM_gtsam::internal_addFactorRelPose(
         updateEntityPose(
             worldmodel_->entity_by_id(f.to_kf_), toPose3(to_pose_est));
 
-    worldmodel_->entities_unlock();
+    worldmodel_->entities_unlock_for_write();
 
     // mapviz:
     {
@@ -840,8 +853,6 @@ fid_t ASLAM_gtsam::internal_addFactorRelPose(
         (gtsam::Vector6() << std_ang, std_ang, std_ang, std_xyz, std_xyz,
          std_xyz)
             .finished());
-
-    auto lock = lockHelper(isam2_lock_);
 
     const auto to_pose_key   = state_.mola2gtsam.at(f.to_kf_)[KF_KEY_POSE];
     const auto from_pose_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_POSE];
@@ -953,36 +964,36 @@ void ASLAM_gtsam::doAdvertiseUpdatedLocalization(
 
     using mrpt::poses::CPose3D;
 
-#if 0
-    worldmodel_->entities_lock();
+    worldmodel_->entities_lock_for_read();
 
     const auto    p = getEntityPose(worldmodel_->entity_by_id(l.reference_kf));
     const CPose3D ref_pose(p);
 
-    worldmodel_->entities_unlock();
+    worldmodel_->entities_unlock_for_read();
 
     CPose3D cur_global_pose = ref_pose + CPose3D(l.pose);
-    MRPT_LOG_WARN_STREAM(
+    MRPT_LOG_DEBUG_STREAM(
         "timestamp=" << std::fixed << mrpt::Clock::toDouble(l.timestamp)
                      << ". Advertized new pose=" << cur_global_pose.asString());
 
     // Insert into trajectory path:
-    state_.trajectory.insert(l.timestamp, cur_global_pose.asTPose());
-
+    // state_.trajectory.insert(l.timestamp, cur_global_pose.asTPose());
 
     if (SAVE_KITTI_PATH_FILE)
     {
-        static std::ofstream f("kitti_path.txt");
+        static std::ofstream ft("kitti_path_timestamps.txt");
+        static std::ofstream fp("kitti_path.txt");
 
         const auto M =
             cur_global_pose
                 .getHomogeneousMatrixVal<mrpt::math::CMatrixDouble44>();
 
         for (int r = 0; r < 3; r++)
-            for (int c = 0; c < 4; c++) f << mrpt::format("%f ", M(r, c));
-        f << "\n";
+            for (int c = 0; c < 4; c++) fp << mrpt::format("%f ", M(r, c));
+        fp << "\n";
+
+        ft << mrpt::Clock::toDouble(l.timestamp) << "\n";
     }
-#endif
 
     MRPT_TODO("notify to all modules subscribed to localization updates");
 

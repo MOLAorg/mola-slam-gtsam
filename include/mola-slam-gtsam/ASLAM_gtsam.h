@@ -109,7 +109,8 @@ class ASLAM_gtsam : public BackEndBase
         std::array<std::map<gtsam::Key, mola::id_t>, KF_KEY_COUNT> gtsam2mola;
     };
 
-    SLAM_state                 state_;
+    SLAM_state state_;
+    /** mutex for: gtsam solver (isam2), newfactors, newvalues & kf_has_value */
     std::recursive_timed_mutex isam2_lock_;
     std::recursive_timed_mutex vizmap_lock_;
     std::recursive_timed_mutex keys_map_lock_;  //!< locks mola2gtsam/gtsam2mola
