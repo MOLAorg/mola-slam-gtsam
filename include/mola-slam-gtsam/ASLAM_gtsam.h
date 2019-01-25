@@ -40,6 +40,7 @@ class ASLAM_gtsam : public BackEndBase
     // See docs in base class
     void initialize(const std::string& cfg_block) override;
     void spinOnce() override;
+    void onQuit() override;
 
     /** Type selector for kind of KeyFrame state vector representation */
     enum class StateVectorType : int8_t
@@ -53,9 +54,15 @@ class ASLAM_gtsam : public BackEndBase
 
     struct Parameters
     {
+        /** See StateVectorType */
         StateVectorType state_vector{StateVectorType::Undefined};
 
+        /** Use iSAM2 (true) or Lev-Marq. (false) */
         bool use_incremental_solver{true};
+
+        /** Saves the overall optimized trajectory at the end, in different file
+         * formats, if !="" (default:"") */
+        std::string save_trajectory_file_prefix{};
     };
 
     Parameters params_;
@@ -64,7 +71,7 @@ class ASLAM_gtsam : public BackEndBase
     ProposeKF_Output doAddKeyFrame(const ProposeKF_Input& i) override;
     AddFactor_Output doAddFactor(Factor& newF) override;
     void             doAdvertiseUpdatedLocalization(
-                    const AdvertiseUpdatedLocalization_Input& l) override;
+                    AdvertiseUpdatedLocalization_Input l) override;
 
    private:
     /** Indices for accessing the KF_gtsam_keys array */
@@ -88,8 +95,14 @@ class ASLAM_gtsam : public BackEndBase
         gtsam::Values               newvalues;
         std::set<mola::id_t>        kf_has_value;
 
-        /** History of vehicle poses over time */
-        // mrpt::poses::CPose3DInterpolator trajectory;
+        /** History of vehicle poses over time (stored in
+         * params_.save_trajectory_file_prefix!="").
+         * Note that this stores relative poses for all frames, keyframes and
+         * non-keyframes. We keep them relative so we can reconstruct the
+         * optimal poses at any moment, composing the poses of the base,
+         * optimized, KF of reference for each entry. */
+        std::map<mrpt::Clock::time_point, AdvertiseUpdatedLocalization_Input>
+            trajectory{};
 
         // locked by last_kf_estimates_lock_ as well:
         mrpt::graphs::CNetworkOfPoses3D            vizmap;
@@ -126,6 +139,10 @@ class ASLAM_gtsam : public BackEndBase
 
     void mola2gtsam_register_new_kf(const mola::id_t kf_id);
 
+    /** Returns a list with all keyframes and, if
+     * save_trajectory_file_prefix!="", all non keyframes. */
+    mrpt::poses::CPose3DInterpolator reconstruct_whole_path() const;
+
     // TODO: Temporary code, should be moved to a new module "MapViz":
     // --------------
     mola::WorkerThreadsPool gui_updater_pool_{
@@ -133,6 +150,7 @@ class ASLAM_gtsam : public BackEndBase
 
     struct DisplayInfo
     {
+        mrpt::Clock::time_point         current_tim{};
         mrpt::graphs::CNetworkOfPoses3D vizmap;
     };
     /** This will be run in a dedicated thread inside gui_updater_pool_ */

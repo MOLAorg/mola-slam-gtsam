@@ -70,7 +70,7 @@ BackEndBase::AddFactor_Output RSLAM_gtsam::doAddFactor(Factor& f)
     MRPT_END
 }
 void RSLAM_gtsam::doAdvertiseUpdatedLocalization(
-    const AdvertiseUpdatedLocalization_Input& l)
+    AdvertiseUpdatedLocalization_Input l)
 {
     MRPT_START
 

@@ -60,8 +60,6 @@ LockHelper<T> lockHelper(T& t)
     return LockHelper<T>(&t);
 }
 
-static const bool SAVE_KITTI_PATH_FILE = true;
-
 MRPT_TODO("Move all these aux funcs somewhere else");
 
 static gtsam::Pose3 toPose3(const mrpt::math::TPose3D& p)
@@ -164,7 +162,7 @@ static mrpt::Clock::time_point getEntityTimeStamp(const mola::Entity& e)
 {
     MRPT_TRY_START
     //
-    mrpt::Clock::time_point ret;
+    mrpt::Clock::time_point ret{};
     std::visit(
         overloaded{
             [&](const EntityBase& ee) { ret = ee.timestamp_; },
@@ -175,6 +173,8 @@ static mrpt::Clock::time_point getEntityTimeStamp(const mola::Entity& e)
             },
         },
         e);
+
+    ASSERT_(ret != INVALID_TIMESTAMP);
 
     return ret;
     MRPT_TRY_END
@@ -343,6 +343,7 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
     }
 
     YAML_LOAD_REQ(params_, use_incremental_solver, bool);
+    YAML_LOAD_OPT(params_, save_trajectory_file_prefix, std::string);
 
     // Ensure we have access to the worldmodel:
     ASSERT_(worldmodel_);
@@ -508,7 +509,15 @@ void ASLAM_gtsam::spinOnce()
     // -------------------
     auto di = std::make_shared<DisplayInfo>();
     {
-        auto lock  = lockHelper(vizmap_lock_);
+        auto lock = lockHelper(vizmap_lock_);
+
+        if (state_.last_created_kf_id != mola::INVALID_ID)
+        {
+            worldmodel_->entities_lock_for_read();
+            di->current_tim = getEntityTimeStamp(
+                worldmodel_->entity_by_id(state_.last_created_kf_id));
+            worldmodel_->entities_unlock_for_read();
+        }
         di->vizmap = state_.vizmap;  // make a copy
     }
     gui_updater_pool_.enqueue(&ASLAM_gtsam::doUpdateDisplay, this, di);
@@ -958,42 +967,22 @@ fid_t ASLAM_gtsam::internal_addFactorRelPose(
 }
 
 void ASLAM_gtsam::doAdvertiseUpdatedLocalization(
-    const AdvertiseUpdatedLocalization_Input& l)
+    AdvertiseUpdatedLocalization_Input l)
 {
     MRPT_START
 
-    using mrpt::poses::CPose3D;
+    ProfilerEntry tleg(profiler_, "doAdvertiseUpdatedLocalization");
 
-    worldmodel_->entities_lock_for_read();
+    ASSERT_(l.timestamp != INVALID_TIMESTAMP);
 
-    const auto    p = getEntityPose(worldmodel_->entity_by_id(l.reference_kf));
-    const CPose3D ref_pose(p);
-
-    worldmodel_->entities_unlock_for_read();
-
-    CPose3D cur_global_pose = ref_pose + CPose3D(l.pose);
     MRPT_LOG_DEBUG_STREAM(
-        "timestamp=" << std::fixed << mrpt::Clock::toDouble(l.timestamp)
-                     << ". Advertized new pose=" << cur_global_pose.asString());
+        "AdvertiseUpdatedLocalization: timestamp="
+        << mrpt::Clock::toDouble(l.timestamp) << " ref_kf=#" << l.reference_kf
+        << " rel_pose=" << l.pose.asString());
 
-    // Insert into trajectory path:
-    // state_.trajectory.insert(l.timestamp, cur_global_pose.asTPose());
-
-    if (SAVE_KITTI_PATH_FILE)
-    {
-        static std::ofstream ft("kitti_path_timestamps.txt");
-        static std::ofstream fp("kitti_path.txt");
-
-        const auto M =
-            cur_global_pose
-                .getHomogeneousMatrixVal<mrpt::math::CMatrixDouble44>();
-
-        for (int r = 0; r < 3; r++)
-            for (int c = 0; c < 4; c++) fp << mrpt::format("%f ", M(r, c));
-        fp << "\n";
-
-        ft << mrpt::Clock::toDouble(l.timestamp) << "\n";
-    }
+    // Insert into trajectory path?
+    if (!params_.save_trajectory_file_prefix.empty())
+        state_.trajectory[l.timestamp] = l;
 
     MRPT_TODO("notify to all modules subscribed to localization updates");
 
@@ -1068,10 +1057,20 @@ void ASLAM_gtsam::doUpdateDisplay(std::shared_ptr<DisplayInfo> di)
             }
 
             scene->insert(gl_graph);
+
+            if (di->current_tim != INVALID_TIMESTAMP)
+            {
+                const auto s = mrpt::format(
+                    "Timestamp: %s",
+                    mrpt::system::dateTimeLocalToString(di->current_tim)
+                        .c_str());
+                display_->addTextMessage(
+                    5, 5, s, mrpt::img::TColorf(1, 1, 1), "sans", 11,
+                    mrpt::opengl::NICE, 0 /*id*/, 1.5, 0.1, true /*shadow*/);
+            }
         }
-        /*        display_->setCameraPointingToPoint(
-                    last_kf_pos.x(), last_kf_pos.y(), last_kf_pos.z());
-        */
+        display_->setCameraPointingToPoint(
+            last_kf_pos.x(), last_kf_pos.y(), last_kf_pos.z());
 
         display_->repaint();
     }
@@ -1095,4 +1094,82 @@ void ASLAM_gtsam::mola2gtsam_register_new_kf(const mola::id_t kf_id)
 
     state_.gtsam2mola[KF_KEY_POSE][pose_key] = kf_id;
     state_.gtsam2mola[KF_KEY_VEL][vel_key]   = kf_id;
+}
+
+mrpt::poses::CPose3DInterpolator ASLAM_gtsam::reconstruct_whole_path() const
+{
+    MRPT_START
+
+    using mrpt::math::TPose3D;
+    using mrpt::poses::CPose3D;
+    using mrpt::poses::CPose3DInterpolator;
+
+    // Reconstruct the optimized vehicle/robot path:
+    // Keyframes already are optimized in the world-model.
+    // non-keyframes are stored in "state_.trajectory". See docs of that member.
+
+    // 1st pass: key-frames:
+    CPose3DInterpolator                                 path;
+    mola::fast_map<mola::id_t, mrpt::Clock::time_point> id2time;
+
+    worldmodel_->entities_lock_for_read();
+
+    const auto lst_kf_ids = worldmodel_->entity_all_ids();
+    for (auto id : lst_kf_ids)
+    {
+        const auto&   e   = worldmodel_->entity_by_id(id);
+        const TPose3D p   = getEntityPose(e);
+        const auto    tim = getEntityTimeStamp(e);
+
+        id2time[id] = tim;
+        path.insert(tim, p);
+        std::fixed(std::cout);
+    }
+
+    worldmodel_->entities_unlock_for_read();
+
+    // 2nd pass: non key-frames:
+    for (const auto& localiz_pts : state_.trajectory)
+    {
+        const auto                                tim = localiz_pts.first;
+        const AdvertiseUpdatedLocalization_Input& li  = localiz_pts.second;
+
+        // if we have a KF for this timestamp, the KF is more trustful since it
+        // underwent optimization:
+        if (path.find(tim) != path.end()) continue;
+
+        // otherwise, we have a non KF: compute its pose wrt some other KF:
+        TPose3D abs_pose;
+        path.at(id2time.at(li.reference_kf)).composePose(li.pose, abs_pose);
+
+        path.insert(tim, abs_pose);
+    }
+
+    return path;
+    MRPT_END
+}
+
+void ASLAM_gtsam::onQuit()
+{
+    MRPT_START
+
+    using mrpt::math::TPose3D;
+    using mrpt::poses::CPose3D;
+    using mrpt::poses::CPose3DInterpolator;
+    using namespace std::string_literals;
+
+    // save path?
+    if (!params_.save_trajectory_file_prefix.empty())
+    {
+        const CPose3DInterpolator path = reconstruct_whole_path();
+
+        // Save in MRPT CPose3DInterpolator format:
+        const auto fil = params_.save_trajectory_file_prefix + "_path.txt"s;
+        MRPT_LOG_WARN_STREAM("Saving final estimated trajectory to: " << fil);
+
+        path.saveToTextFile(fil);
+
+    }  // end save path
+
+    MRPT_END
 }
