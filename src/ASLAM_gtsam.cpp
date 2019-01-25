@@ -345,6 +345,9 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
     YAML_LOAD_REQ(params_, use_incremental_solver, bool);
     YAML_LOAD_OPT(params_, save_trajectory_file_prefix, std::string);
 
+    YAML_LOAD_OPT(params_, const_vel_model_std_pos, double);
+    YAML_LOAD_OPT(params_, const_vel_model_std_vel, double);
+
     // Ensure we have access to the worldmodel:
     ASSERT_(worldmodel_);
 
@@ -934,12 +937,8 @@ fid_t ASLAM_gtsam::internal_addFactorRelPose(
         // TODO: 3-5 ditto, rotvel
 
         // errors in constant vel:
-        const double n_accel = 0.5;  // [m/s^2]
-        const double n_vel   = 0.20;  // [m/s]
-        const double n_pos   = 0.10;  // [m]
-
-        const double std_pos = n_pos;
-        const double std_vel = n_vel + n_accel * dt;
+        const double std_pos = params_.const_vel_model_std_pos;
+        const double std_vel = params_.const_vel_model_std_vel;
 
         const gtsam::Vector6 diag_stds = (gtsam::Vector6() << std_pos, std_pos,
                                           std_pos, std_vel, std_vel, std_vel)

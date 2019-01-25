@@ -63,6 +63,11 @@ class ASLAM_gtsam : public BackEndBase
         /** Saves the overall optimized trajectory at the end, in different file
          * formats, if !="" (default:"") */
         std::string save_trajectory_file_prefix{};
+
+        /** Const. velocity model: sigma of the position equation (see paper) */
+        double const_vel_model_std_pos{0.1};
+        /** Const. velocity model: sigma of the velocity equation (see paper) */
+        double const_vel_model_std_vel{1.0};
     };
 
     Parameters params_;
