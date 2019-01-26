@@ -12,6 +12,7 @@
 
 // MRPT headers must come first (due to Eigen plugin)
 #include <mola-kernel/entities/entities-common.h>
+#include <mola-kernel/lock_helper.h>
 #include <mola-kernel/variant_helper.h>
 #include <mola-kernel/yaml_helpers.h>
 #include <mola-slam-gtsam/ASLAM_gtsam.h>
@@ -28,37 +29,6 @@
 #include <gtsam/slam/PriorFactor.h>
 
 using namespace mola;
-
-template <class T>
-class LockHelper
-{
-   public:
-    LockHelper(T* l) : l_{l} { l_->lock(); }
-    ~LockHelper()
-    {
-        if (l_) l_->unlock();
-    }
-
-    LockHelper(const LockHelper& o) = delete;
-    LockHelper& operator=(const LockHelper& o) = delete;
-
-    LockHelper(LockHelper&& o) : l_{o.l} { o.l = nullptr; }
-    LockHelper& operator=(LockHelper&& o)
-    {
-        l_  = o.l;
-        o.l = nullptr;
-        return *this;
-    }
-
-   private:
-    T* l_{nullptr};
-};
-
-template <class T>
-LockHelper<T> lockHelper(T& t)
-{
-    return LockHelper<T>(&t);
-}
 
 MRPT_TODO("Move all these aux funcs somewhere else");
 
