@@ -68,6 +68,8 @@ class ASLAM_gtsam : public BackEndBase
         double const_vel_model_std_pos{0.1};
         /** Const. velocity model: sigma of the velocity equation (see paper) */
         double const_vel_model_std_vel{1.0};
+
+        double max_interval_between_kfs_for_dynamic_model{5.0};
     };
 
     Parameters params_;
@@ -116,7 +118,8 @@ class ASLAM_gtsam : public BackEndBase
         /** Absolute coordinates single reference frame (WorldModel index) */
         id_t root_kf_id{mola::INVALID_ID};
 
-        id_t last_created_kf_id{mola::INVALID_ID};
+        id_t                    last_created_kf_id{mola::INVALID_ID};
+        mrpt::Clock::time_point last_created_kf_id_tim{INVALID_TIMESTAMP};
 
         /** Map between mola WorldModel KF indices and the corresponding gtsam
          * Key(s) value(s). When in SE2/SE3 mode, only the pose Key is used.
@@ -134,15 +137,14 @@ class ASLAM_gtsam : public BackEndBase
     std::recursive_timed_mutex keys_map_lock_;  //!< locks mola2gtsam/gtsam2mola
 
     fid_t addFactor(const FactorRelativePose3& f);
-    fid_t addFactor(const FactorRelativePose3ConstVel& f);
-
-    fid_t internal_addFactorRelPose(
-        const FactorRelativePose3& f, const bool addDynamicsFactor);
+    fid_t addFactor(const FactorDynamicsConstVel& f);
 
     mola::id_t internal_addKeyFrame_Root(const ProposeKF_Input& i);
     mola::id_t internal_addKeyFrame_Regular(const ProposeKF_Input& i);
 
     void mola2gtsam_register_new_kf(const mola::id_t kf_id);
+
+    void internal_add_gtsam_prior_pose(const mola::id_t kf_id);
 
     /** Returns a list with all keyframes and, if
      * save_trajectory_file_prefix!="", all non keyframes. */
