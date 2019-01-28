@@ -60,94 +60,17 @@ static mrpt::math::TTwist3D toTTwist3D(const gtsam::Velocity3& v)
 
 static void updateEntityPose(mola::Entity& e, const gtsam::Pose3& x)
 {
-    MRPT_TRY_START
-    const auto p = toTPose3D(x);
-
-    std::visit(
-        overloaded{
-            [&](RefPose3&) {
-                ASSERTMSG_(
-                    p == mrpt::math::TPose3D::Identity(),
-                    "RefPose3 cannot be assigned a pose != Identity()");
-            },
-            [&](RelDynPose3KF& ee) { ee.relpose_value = p; },
-            [&](RelPose3& ee) { ee.relpose_value = p; },
-            [&](RelPose3KF& ee) { ee.relpose_value = p; },
-            []([[maybe_unused]] auto ee) {
-                throw std::runtime_error(
-                    mrpt::format("[updateEntityPose] Unknown Entity type!"));
-            },
-        },
-        e);
-    MRPT_TRY_END
+    mola::entity_update_pose(e, toTPose3D(x));
 }
+
+static std::array<double, 3> toVelArray(const gtsam::Velocity3& v)
+{
+    return {v.x(), v.y(), v.z()};
+}
+
 static void updateEntityVel(mola::Entity& e, const gtsam::Velocity3& v)
 {
-    MRPT_TRY_START
-
-    std::visit(
-        overloaded{
-            [&](RefPose3&) {
-                THROW_EXCEPTION("RefPose3 cannot be assigned a velocity");
-            },
-            [&](RelDynPose3KF& ee) {
-                ee.twist_value.vx = v.x();
-                ee.twist_value.vy = v.y();
-                ee.twist_value.vz = v.z();
-            },
-            [&](RelPose3& ee) {},
-            [&](RelPose3KF& ee) {},
-            []([[maybe_unused]] auto ee) {
-                throw std::runtime_error(
-                    mrpt::format("[updateEntityPose] Unknown Entity type!"));
-            },
-        },
-        e);
-    MRPT_TRY_END
-}
-
-static mrpt::math::TPose3D getEntityPose(const mola::Entity& e)
-{
-    MRPT_TRY_START
-    //
-    mrpt::math::TPose3D ret;
-    std::visit(
-        overloaded{
-            [&](const RefPose3&) { ret = mrpt::math::TPose3D::Identity(); },
-            [&](const RelDynPose3KF& ee) { ret = ee.relpose_value; },
-            [&](const RelPose3& ee) { ret = ee.relpose_value; },
-            [&](const RelPose3KF& ee) { ret = ee.relpose_value; },
-            []([[maybe_unused]] auto ee) {
-                throw std::runtime_error(
-                    mrpt::format("[getEntityPose] Unknown Entity type!"));
-            },
-        },
-        e);
-
-    return ret;
-    MRPT_TRY_END
-}
-
-static mrpt::Clock::time_point getEntityTimeStamp(const mola::Entity& e)
-{
-    MRPT_TRY_START
-    //
-    mrpt::Clock::time_point ret{};
-    std::visit(
-        overloaded{
-            [&](const EntityBase& ee) { ret = ee.timestamp_; },
-            [&](const EntityOther& ee) { ret = ee->timestamp_; },
-            [](std::monostate) {
-                throw std::runtime_error(
-                    mrpt::format("[getEntityTimeStamp] Unknown Entity type!"));
-            },
-        },
-        e);
-
-    ASSERT_(ret != INVALID_TIMESTAMP);
-
-    return ret;
-    MRPT_TRY_END
+    mola::entity_update_vel(e, toVelArray(v));
 }
 
 namespace gtsam
@@ -488,7 +411,7 @@ void ASLAM_gtsam::spinOnce()
         if (state_.last_created_kf_id != mola::INVALID_ID)
         {
             worldmodel_->entities_lock_for_read();
-            di->current_tim = getEntityTimeStamp(
+            di->current_tim = mola::entity_get_timestamp(
                 worldmodel_->entity_by_id(state_.last_created_kf_id));
             worldmodel_->entities_unlock_for_read();
         }
@@ -777,9 +700,9 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
     worldmodel_->entities_lock_for_write();
 
     const auto& kf_from = worldmodel_->entity_by_id(f.from_kf_);
-    const auto& kf_to   = worldmodel_->entity_by_id(f.to_kf_);
+    // const auto& kf_to   = worldmodel_->entity_by_id(f.to_kf_);
 
-    const auto from_pose_est = getEntityPose(kf_from);
+    const auto from_pose_est = mola::entity_get_pose(kf_from);
 
     from_pose_est.composePose(f.rel_pose_, to_pose_est);
 
@@ -815,8 +738,8 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
     const auto to_pose_key   = state_.mola2gtsam.at(f.to_kf_)[KF_KEY_POSE];
     const auto from_pose_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_POSE];
     // (vel keys may be used or not; declare here for convenience anyway)
-    const auto to_vel_key   = state_.mola2gtsam.at(f.to_kf_)[KF_KEY_VEL];
-    const auto from_vel_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_VEL];
+    const auto to_vel_key = state_.mola2gtsam.at(f.to_kf_)[KF_KEY_VEL];
+    // const auto from_vel_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_VEL];
 
     // Add to list of initial guess (if not done already with a former
     // factor):
@@ -896,9 +819,9 @@ fid_t ASLAM_gtsam::addFactor(const FactorDynamicsConstVel& f)
     const auto& kf_from = worldmodel_->entity_by_id(f.from_kf_);
     const auto& kf_to   = worldmodel_->entity_by_id(f.to_kf_);
 
-    const auto from_tim      = getEntityTimeStamp(kf_from);
-    const auto from_pose_est = getEntityPose(kf_from);
-    const auto to_tim        = getEntityTimeStamp(kf_to);
+    const auto from_tim      = mola::entity_get_timestamp(kf_from);
+    const auto from_pose_est = mola::entity_get_pose(kf_from);
+    const auto to_tim        = mola::entity_get_timestamp(kf_to);
 
     MRPT_TODO("Build KF guess from dynamics");
     to_pose_est = from_pose_est;
@@ -1153,8 +1076,8 @@ mrpt::poses::CPose3DInterpolator ASLAM_gtsam::reconstruct_whole_path() const
     for (auto id : lst_kf_ids)
     {
         const auto&   e   = worldmodel_->entity_by_id(id);
-        const TPose3D p   = getEntityPose(e);
-        const auto    tim = getEntityTimeStamp(e);
+        const TPose3D p   = mola::entity_get_pose(e);
+        const auto    tim = mola::entity_get_timestamp(e);
 
         id2time[id] = tim;
         path.insert(tim, p);
