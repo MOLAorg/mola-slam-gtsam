@@ -27,6 +27,7 @@
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
+#include <gtsam_unstable/slam/SmartStereoProjectionPoseFactor.h>
 
 using namespace mola;
 
@@ -667,6 +668,7 @@ BackEndBase::AddFactor_Output ASLAM_gtsam::doAddFactor(Factor& newF)
         overloaded{
             [&](const FactorRelativePose3& f) { fid = addFactor(f); },
             [&](const FactorDynamicsConstVel& f) { fid = addFactor(f); },
+            [&](const FactorStereoProjectionPose& f) { fid = addFactor(f); },
             [this, newF]([[maybe_unused]] auto f) {
                 MRPT_LOG_ERROR("Unknown factor type!");
             },
@@ -1165,4 +1167,94 @@ void ASLAM_gtsam::internal_add_gtsam_prior_pose(const mola::id_t kf_id)
         default:
             THROW_EXCEPTION("Unhandled state vector type");
     }
+}
+
+void ASLAM_gtsam::onSmartFactorChanged(
+    mola::fid_t id, const mola::FactorBase* f)
+{
+    MRPT_START
+
+    using namespace gtsam::symbol_shorthand;  // X()
+
+    const auto& fst = dynamic_cast<const mola::FactorStereoProjectionPose&>(*f);
+
+    const auto& all_obs = fst.allObservations();
+    ASSERT_(all_obs.size() > 0);
+
+    // We have been called because of the last entry in the list, so process it:
+    const auto& last_obs = *all_obs.rbegin();
+
+    const auto sp = gtsam::StereoPoint2(
+        last_obs.pixel_coords.x_left, last_obs.pixel_coords.x_right,
+        last_obs.pixel_coords.y);
+
+    const gtsam::Key pose_key = X(last_obs.observing_kf);
+
+    state_.stereo_factors.at(id)->add(sp, pose_key, state_.camera_K);
+
+    if (state_.smart_factors_in_gtsam.count(id) == 0)
+    {
+        state_.smart_factors_in_gtsam.insert(id);
+        state_.newfactors.push_back(state_.stereo_factors.at(id));
+    }
+
+    MRPT_END
+}
+
+mola::id_t ASLAM_gtsam::temp_createStereoCamera(
+    const mrpt::img::TCamera& left, const mrpt::img::TCamera& right,
+    const double baseline)
+{
+    MRPT_START
+
+    MRPT_TODO("Add into the world-model and get a real entity id");
+    mola::id_t cam_K_id = 10000000;
+
+    MRPT_LOG_DEBUG_STREAM(
+        "Defining stereo camera: l.fx=" << left.fx() << " r.fx=" << right.fx()
+                                        << " l.fy=" << left.fy()
+                                        << " r.fy=" << right.fy());
+    // Camera parameters
+    ASSERT_(std::abs(left.fx() - right.fx()) < 1e-6);
+    ASSERT_(std::abs(left.fy() - right.fy()) < 1e-6);
+    ASSERT_(std::abs(left.cx() - right.cx()) < 1e-6);
+    ASSERT_(std::abs(left.cy() - right.cy()) < 1e-6);
+
+    const double fx = left.fx(), fy = left.fy(), cx = left.cx(), cy = left.cy();
+
+    state_.camera_K = gtsam::Cal3_S2Stereo::shared_ptr(
+        new gtsam::Cal3_S2Stereo(fx, fy, 0.0, cx, cy, baseline));
+
+    return cam_K_id;
+
+    MRPT_END
+}
+
+fid_t ASLAM_gtsam::addFactor(const FactorStereoProjectionPose& f)
+{
+    MRPT_START
+    // MRPT_LOG_DEBUG("Adding new FactorStereoProjectionPose");
+
+    // Add to the WorldModel:
+    worldmodel_->factors_lock_for_write();
+    const fid_t new_fid = worldmodel_->factor_push_back(f);
+    worldmodel_->factors_unlock_for_write();
+
+    MRPT_TODO("Take noise params from f");
+    auto gaussian = gtsam::noiseModel::Isotropic::Sigma(3, 1.0);
+
+    gtsam::SmartProjectionParams params(
+        gtsam::HESSIAN, gtsam::ZERO_ON_DEGENERACY);
+
+    auto factor_ptr = gtsam::SmartStereoProjectionPoseFactor::shared_ptr(
+        new gtsam::SmartStereoProjectionPoseFactor(gaussian, params));
+
+    state_.stereo_factors[new_fid] = factor_ptr;
+
+    // Dont add to newfactors until we have some observations to avoid ill-posed
+    // problems.
+
+    return new_fid;
+
+    MRPT_END
 }

@@ -19,9 +19,11 @@
 #include <mrpt/poses/CPose3DInterpolator.h>
 #include <mrpt/typemeta/TEnumType.h>
 // gtsam next:
+#include <gtsam/geometry/Cal3_S2Stereo.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
+#include <gtsam_unstable/slam/SmartStereoProjectionPoseFactor.h>
 
 #include <mutex>
 
@@ -79,6 +81,12 @@ class ASLAM_gtsam : public BackEndBase
     AddFactor_Output doAddFactor(Factor& newF) override;
     void             doAdvertiseUpdatedLocalization(
                     AdvertiseUpdatedLocalization_Input l) override;
+    void onSmartFactorChanged(
+        mola::fid_t id, const mola::FactorBase* f) override;
+
+    mola::id_t temp_createStereoCamera(
+        const mrpt::img::TCamera& left, const mrpt::img::TCamera& right,
+        const double baseline) override;
 
    private:
     /** Indices for accessing the KF_gtsam_keys array */
@@ -128,6 +136,17 @@ class ASLAM_gtsam : public BackEndBase
         std::map<mola::id_t, KF_gtsam_keys> mola2gtsam;
         /** Inverse map for `mola2gtsam` (indexed by gtsam *pose* ID) */
         std::array<std::map<gtsam::Key, mola::id_t>, KF_KEY_COUNT> gtsam2mola;
+
+        gtsam::Cal3_S2Stereo::shared_ptr camera_K;
+        std::map<
+            mola::fid_t, gtsam::SmartStereoProjectionPoseFactor::shared_ptr>
+            stereo_factors;
+
+        /** Smart factors may be created and stored (e.g. in stereo_factors),
+         * but not added to the new_factors list, until they actually have some
+         * observations. This list reflects whether they are already in
+         * new_factors or not. */
+        std::set<mola::fid_t> smart_factors_in_gtsam;
     };
 
     SLAM_state state_;
@@ -138,6 +157,7 @@ class ASLAM_gtsam : public BackEndBase
 
     fid_t addFactor(const FactorRelativePose3& f);
     fid_t addFactor(const FactorDynamicsConstVel& f);
+    fid_t addFactor(const FactorStereoProjectionPose& f);
 
     mola::id_t internal_addKeyFrame_Root(const ProposeKF_Input& i);
     mola::id_t internal_addKeyFrame_Regular(const ProposeKF_Input& i);
