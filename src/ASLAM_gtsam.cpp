@@ -275,8 +275,21 @@ void ASLAM_gtsam::spinOnce()
     if (params_.use_incremental_solver)
     {
         auto lock = lockHelper(isam2_lock_);
-        if (!state_.newfactors.empty())
+        // smart factors are not re-added to newfactors, but we should
+        // re-optimize if needed anyway:
+        if (!state_.newfactors.empty() || state_.smart_factors_changed)
         {
+            state_.smart_factors_changed = false;
+
+#if 0
+            // Debug:
+            for (const auto& sf : state_.stereo_factors)
+            {
+                std::cout << "Stereo FID:" << sf.first;
+                sf.second->print();
+            }
+#endif
+
             {
                 ProfilerEntry tle(profiler_, "spinOnce.isam2_update");
                 state_.isam2->update(state_.newfactors, state_.newvalues);
@@ -284,8 +297,8 @@ void ASLAM_gtsam::spinOnce()
 
             {
                 ProfilerEntry tle(profiler_, "spinOnce.isam2_calcEstimate");
-                // result = state_.isam2->calculateEstimate();
-                result = state_.isam2->calculateBestEstimate();
+                result = state_.isam2->calculateEstimate();
+                // result = state_.isam2->calculateBestEstimate();
             }
 
             // If we processed a "newvalue" that was the first gross estimate of
@@ -1174,6 +1187,9 @@ void ASLAM_gtsam::onSmartFactorChanged(
 {
     MRPT_START
 
+    // NOTE: The caller must use the one-call slam_lock() instead
+    // auto lock = lockHelper(isam2_lock_);
+
     using namespace gtsam::symbol_shorthand;  // X()
 
     const auto& fst = dynamic_cast<const mola::FactorStereoProjectionPose&>(*f);
@@ -1188,15 +1204,15 @@ void ASLAM_gtsam::onSmartFactorChanged(
         last_obs.pixel_coords.x_left, last_obs.pixel_coords.x_right,
         last_obs.pixel_coords.y);
 
+    MRPT_LOG_DEBUG_STREAM(
+        "FactorStereoProjectionPose.add(): fid=" << id << " from kf id#"
+                                                 << last_obs.observing_kf);
+
     const gtsam::Key pose_key = X(last_obs.observing_kf);
 
     state_.stereo_factors.at(id)->add(sp, pose_key, state_.camera_K);
 
-    if (state_.smart_factors_in_gtsam.count(id) == 0)
-    {
-        state_.smart_factors_in_gtsam.insert(id);
-        state_.newfactors.push_back(state_.stereo_factors.at(id));
-    }
+    state_.smart_factors_changed = true;
 
     MRPT_END
 }
@@ -1250,11 +1266,15 @@ fid_t ASLAM_gtsam::addFactor(const FactorStereoProjectionPose& f)
         new gtsam::SmartStereoProjectionPoseFactor(gaussian, params));
 
     state_.stereo_factors[new_fid] = factor_ptr;
+    state_.newfactors.push_back(factor_ptr);
 
-    // Dont add to newfactors until we have some observations to avoid ill-posed
-    // problems.
+    MRPT_LOG_DEBUG_STREAM(
+        "FactorStereoProjectionPose: Created empty. fid=" << new_fid);
 
     return new_fid;
 
     MRPT_END
 }
+
+void ASLAM_gtsam::lock_slam() { isam2_lock_.lock(); }
+void ASLAM_gtsam::unlock_slam() { isam2_lock_.unlock(); }

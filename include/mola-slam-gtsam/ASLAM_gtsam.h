@@ -84,6 +84,9 @@ class ASLAM_gtsam : public BackEndBase
     void onSmartFactorChanged(
         mola::fid_t id, const mola::FactorBase* f) override;
 
+    void lock_slam() override;
+    void unlock_slam() override;
+
     mola::id_t temp_createStereoCamera(
         const mrpt::img::TCamera& left, const mrpt::img::TCamera& right,
         const double baseline) override;
@@ -142,11 +145,7 @@ class ASLAM_gtsam : public BackEndBase
             mola::fid_t, gtsam::SmartStereoProjectionPoseFactor::shared_ptr>
             stereo_factors;
 
-        /** Smart factors may be created and stored (e.g. in stereo_factors),
-         * but not added to the new_factors list, until they actually have some
-         * observations. This list reflects whether they are already in
-         * new_factors or not. */
-        std::set<mola::fid_t> smart_factors_in_gtsam;
+        std::atomic_bool smart_factors_changed{false};
     };
 
     SLAM_state state_;
