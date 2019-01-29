@@ -50,6 +50,11 @@ static mrpt::math::TPose3D toTPose3D(const gtsam::Pose3& p)
     return mrpt::poses::CPose3D(H).asTPose();
 }
 
+static gtsam::Point3 toPoint3(const mrpt::math::TPoint3D& p)
+{
+    return gtsam::Point3(p.x, p.y, p.z);
+}
+
 static mrpt::math::TTwist3D toTTwist3D(const gtsam::Velocity3& v)
 {
     mrpt::math::TTwist3D t;
@@ -547,6 +552,14 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
 
     using namespace gtsam::symbol_shorthand;  // X(), V()
 
+    // Do we already have a KF for this timestamp?
+    if (auto it_kf = state_.time2kf.find(i.timestamp);
+        it_kf != state_.time2kf.end())
+    {
+        // Yes: return it since we cannot have two KFs for the same timestamp.
+        return it_kf->second;
+    }
+
     mola::RelPose3KF new_kf;
     new_kf.base_id_   = state_.root_kf_id;
     new_kf.timestamp_ = i.timestamp;
@@ -560,6 +573,9 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
     worldmodel_->entities_lock_for_write();
     const auto new_kf_id = worldmodel_->entity_emplace_back(new_kf);
     worldmodel_->entities_unlock_for_write();
+
+    // Add to timestamp register:
+    state_.time2kf[i.timestamp] = new_kf_id;
 
     const gtsam::Key key_kf_pose = X(new_kf_id), key_kf_vel = V(new_kf_id);
 
@@ -1192,7 +1208,8 @@ void ASLAM_gtsam::onSmartFactorChanged(
 
     using namespace gtsam::symbol_shorthand;  // X()
 
-    const auto& fst = dynamic_cast<const mola::FactorStereoProjectionPose&>(*f);
+    const auto& fst =
+        dynamic_cast<const mola::SmartFactorStereoProjectionPose&>(*f);
 
     const auto& all_obs = fst.allObservations();
     ASSERT_(all_obs.size() > 0);
@@ -1205,8 +1222,8 @@ void ASLAM_gtsam::onSmartFactorChanged(
         last_obs.pixel_coords.y);
 
     MRPT_LOG_DEBUG_STREAM(
-        "FactorStereoProjectionPose.add(): fid=" << id << " from kf id#"
-                                                 << last_obs.observing_kf);
+        "SmartFactorStereoProjectionPose.add(): fid=" << id << " from kf id#"
+                                                      << last_obs.observing_kf);
 
     const gtsam::Key pose_key = X(last_obs.observing_kf);
 
@@ -1246,10 +1263,10 @@ mola::id_t ASLAM_gtsam::temp_createStereoCamera(
     MRPT_END
 }
 
-fid_t ASLAM_gtsam::addFactor(const FactorStereoProjectionPose& f)
+fid_t ASLAM_gtsam::addFactor(const SmartFactorStereoProjectionPose& f)
 {
     MRPT_START
-    // MRPT_LOG_DEBUG("Adding new FactorStereoProjectionPose");
+    // MRPT_LOG_DEBUG("Adding new SmartFactorStereoProjectionPose");
 
     // Add to the WorldModel:
     worldmodel_->factors_lock_for_write();
@@ -1269,7 +1286,46 @@ fid_t ASLAM_gtsam::addFactor(const FactorStereoProjectionPose& f)
     state_.newfactors.push_back(factor_ptr);
 
     MRPT_LOG_DEBUG_STREAM(
-        "FactorStereoProjectionPose: Created empty. fid=" << new_fid);
+        "SmartFactorStereoProjectionPose: Created empty. fid=" << new_fid);
+
+    return new_fid;
+
+    MRPT_END
+}
+
+fid_t ASLAM_gtsam::addFactor(const FactorStereoProjectionPose& f)
+{
+    MRPT_START
+    // MRPT_LOG_DEBUG("Adding new SmartFactorStereoProjectionPose");
+
+    // Add to the WorldModel:
+    worldmodel_->factors_lock_for_write();
+    const fid_t new_fid = worldmodel_->factor_push_back(f);
+    worldmodel_->factors_unlock_for_write();
+
+    MRPT_TODO("Take noise params from f");
+    auto gaussian = gtsam::noiseModel::Isotropic::Sigma(3, 1.0);
+
+    const auto sp = gtsam::StereoPoint2(
+        f.observation_.x_left, f.observation_.x_right, f.observation_.y);
+
+    MRPT_LOG_DEBUG_STREAM(
+        "FactorStereoProjectionPose: new_fid="
+        << new_fid << " from kf id#" << f.observing_kf_ << " lm #"
+        << f.observed_landmark_ << " xl=" << f.observation_.x_left
+        << " xr=" << f.observation_.x_right << " y=" << f.observation_.y);
+
+    using namespace gtsam::symbol_shorthand;  // X(), L()
+
+    const gtsam::Key pose_key = X(f.observing_kf_);
+    const gtsam::Key lm_key   = L(f.observed_landmark_);
+
+    gtsam::Pose3 cameraPoseOnRobot;
+
+    state_.newfactors.emplace_shared<
+        gtsam::GenericStereoFactor<gtsam::Pose3, gtsam::Point3>>(
+        sp, gaussian, pose_key, lm_key, state_.camera_K, false, true,
+        cameraPoseOnRobot);
 
     return new_fid;
 
@@ -1278,3 +1334,24 @@ fid_t ASLAM_gtsam::addFactor(const FactorStereoProjectionPose& f)
 
 void ASLAM_gtsam::lock_slam() { isam2_lock_.lock(); }
 void ASLAM_gtsam::unlock_slam() { isam2_lock_.unlock(); }
+
+mola::id_t ASLAM_gtsam::temp_createLandmark(
+    const mrpt::math::TPoint3D& init_value)
+{
+    MRPT_START
+    //
+    worldmodel_->entities_lock_for_write();
+    mola::LandmarkPoint3 lm;
+    auto                 new_id = worldmodel_->entity_emplace_back(lm);
+    worldmodel_->entities_unlock_for_write();
+
+    using namespace gtsam::symbol_shorthand;  // X(), L()
+
+    const gtsam::Key lm_key = L(new_id);
+
+    state_.newvalues.insert(lm_key, toPoint3(init_value));
+
+    return new_id;
+
+    MRPT_END
+}

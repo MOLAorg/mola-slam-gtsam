@@ -91,6 +91,9 @@ class ASLAM_gtsam : public BackEndBase
         const mrpt::img::TCamera& left, const mrpt::img::TCamera& right,
         const double baseline) override;
 
+    mola::id_t temp_createLandmark(
+        const mrpt::math::TPoint3D& init_value) override;
+
    private:
     /** Indices for accessing the KF_gtsam_keys array */
     enum kf_key_index_t
@@ -146,6 +149,8 @@ class ASLAM_gtsam : public BackEndBase
             stereo_factors;
 
         std::atomic_bool smart_factors_changed{false};
+
+        std::map<mrpt::Clock::time_point, mola::id_t> time2kf;
     };
 
     SLAM_state state_;
@@ -157,6 +162,7 @@ class ASLAM_gtsam : public BackEndBase
     fid_t addFactor(const FactorRelativePose3& f);
     fid_t addFactor(const FactorDynamicsConstVel& f);
     fid_t addFactor(const FactorStereoProjectionPose& f);
+    fid_t addFactor(const SmartFactorStereoProjectionPose& f);
 
     mola::id_t internal_addKeyFrame_Root(const ProposeKF_Input& i);
     mola::id_t internal_addKeyFrame_Regular(const ProposeKF_Input& i);
