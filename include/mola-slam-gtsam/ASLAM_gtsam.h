@@ -113,8 +113,11 @@ class ASLAM_gtsam : public BackEndBase
 
         /** Pending new elements to add to the map */
         gtsam::NonlinearFactorGraph newfactors;
+        gtsam::NonlinearFactorGraph activeSmartFactors;
         gtsam::Values               newvalues;
         std::set<mola::id_t>        kf_has_value;
+
+        gtsam::Values last_values;
 
         /** History of vehicle poses over time (stored in
          * params_.save_trajectory_file_prefix!="").
@@ -147,8 +150,6 @@ class ASLAM_gtsam : public BackEndBase
         std::map<
             mola::fid_t, gtsam::SmartStereoProjectionPoseFactor::shared_ptr>
             stereo_factors;
-
-        std::atomic_bool smart_factors_changed{false};
 
         std::map<mrpt::Clock::time_point, mola::id_t> time2kf;
     };
