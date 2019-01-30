@@ -18,6 +18,7 @@
 #include <mola-slam-gtsam/ASLAM_gtsam.h>
 #include <mrpt/opengl/CSetOfLines.h>  // TODO: Remove after vizmap module
 #include <mrpt/opengl/graph_tools.h>  // TODO: Remove after vizmap module
+#include <mrpt/opengl/stock_objects.h>  // TODO: Remove after vizmap module
 #include <yaml-cpp/yaml.h>
 
 // GTSAM second:
@@ -985,6 +986,11 @@ void ASLAM_gtsam::doAdvertiseUpdatedLocalization(
 
     ASSERT_(l.timestamp != INVALID_TIMESTAMP);
 
+    //
+    latest_localization_data_mtx_.lock();
+    latest_localization_data_ = l;
+    latest_localization_data_mtx_.unlock();
+
     MRPT_LOG_DEBUG_STREAM(
         "AdvertiseUpdatedLocalization: timestamp="
         << mrpt::Clock::toDouble(l.timestamp) << " ref_kf=#" << l.reference_kf
@@ -993,8 +999,6 @@ void ASLAM_gtsam::doAdvertiseUpdatedLocalization(
     // Insert into trajectory path?
     if (!params_.save_trajectory_file_prefix.empty())
         state_.trajectory[l.timestamp] = l;
-
-    MRPT_TODO("notify to all modules subscribed to localization updates");
 
     MRPT_END
 }
@@ -1037,6 +1041,27 @@ void ASLAM_gtsam::doUpdateDisplay(std::shared_ptr<DisplayInfo> di)
 
             auto gl_graph =
                 mrpt::opengl::graph_tools::graph_visualize(di->vizmap, params);
+
+            // Draw current latest pose:
+            latest_localization_data_mtx_.lock();
+            const AdvertiseUpdatedLocalization_Input latest_loc =
+                latest_localization_data_;
+            latest_localization_data_mtx_.unlock();
+
+            if (const auto ref_kf =
+                    di->vizmap.nodes.find(latest_loc.reference_kf);
+                ref_kf != di->vizmap.nodes.end())
+            {
+                const auto ref_pose = ref_kf->second;
+                const auto abs_pose =
+                    ref_pose + mrpt::poses::CPose3D(latest_loc.pose);
+
+                auto gl_cur_pose =
+                    mrpt::opengl::stock_objects::CornerXYZSimple(1.5f, 4.0f);
+
+                gl_cur_pose->setPose(abs_pose);
+                scene->insert(gl_cur_pose);
+            }
 
             // Draw velocities:
             if (1)

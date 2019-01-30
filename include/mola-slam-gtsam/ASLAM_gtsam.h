@@ -176,6 +176,10 @@ class ASLAM_gtsam : public BackEndBase
      * save_trajectory_file_prefix!="", all non keyframes. */
     mrpt::poses::CPose3DInterpolator reconstruct_whole_path() const;
 
+    /** Latest localization */
+    std::mutex                         latest_localization_data_mtx_;
+    AdvertiseUpdatedLocalization_Input latest_localization_data_;
+
     // TODO: Temporary code, should be moved to a new module "MapViz":
     // --------------
     mola::WorkerThreadsPool gui_updater_pool_{
