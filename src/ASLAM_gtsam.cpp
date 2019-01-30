@@ -26,6 +26,7 @@
 #include <gtsam/inference/Symbol.h>  // X(), V() symbols
 #include <gtsam/navigation/NavState.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+#include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 #include <gtsam_unstable/slam/SmartStereoProjectionPoseFactor.h>
@@ -326,8 +327,6 @@ void ASLAM_gtsam::spinOnce()
 
             state_.last_values = result;
 
-            // gtsam::Marginals marginals(graph, result);
-
             // If we processed a "newvalue" that was the first gross estimate of
             // a KF, it was not marked as "already existing" in kf_has_value, in
             // the hope that a Factor arrived before running the optimization.
@@ -368,6 +367,19 @@ void ASLAM_gtsam::spinOnce()
 
         state_.newvalues   = result;
         state_.last_values = state_.newvalues;
+
+        gtsam::Marginals marginals(state_.newfactors, result);
+
+        using gtsam::symbol_shorthand::V;
+        using gtsam::symbol_shorthand::X;
+
+#if 0
+        for (const auto kv : state_.last_values)
+        {
+            std::cout << "cov key: " << kv.key << "\n"
+                      << marginals.marginalCovariance(kv.key) << "\n";
+        };
+#endif
     }
 
     if (result.size())
