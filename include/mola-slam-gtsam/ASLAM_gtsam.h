@@ -113,7 +113,6 @@ class ASLAM_gtsam : public BackEndBase
 
         /** Pending new elements to add to the map */
         gtsam::NonlinearFactorGraph newfactors;
-        gtsam::NonlinearFactorGraph activeSmartFactors;
         gtsam::Values               newvalues;
         std::set<mola::id_t>        kf_has_value;
 
@@ -170,7 +169,7 @@ class ASLAM_gtsam : public BackEndBase
 
     void mola2gtsam_register_new_kf(const mola::id_t kf_id);
 
-    void internal_add_gtsam_prior_pose(const mola::id_t kf_id);
+    void internal_add_gtsam_prior_vel(const mola::id_t kf_id);
 
     struct whole_path_t
     {

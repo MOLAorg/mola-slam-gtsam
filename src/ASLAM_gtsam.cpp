@@ -283,10 +283,12 @@ void ASLAM_gtsam::spinOnce()
     if (params_.use_incremental_solver)
     {
         auto lock = lockHelper(isam2_lock_);
+
         // smart factors are not re-added to newfactors, but we should
         // re-optimize if needed anyway:
-        if (!state_.newfactors.empty() || !state_.activeSmartFactors.empty())
+        if (!state_.newfactors.empty() || !state_.newvalues.empty())
         {
+#if 0
             // Enforce re-linearization of all smart factors?
             if (!state_.last_values.empty())
             {
@@ -299,7 +301,6 @@ void ASLAM_gtsam::spinOnce()
                 for (const auto& sf : state_.stereo_factors)
                     sf.second->linearize(vals);
             }
-
             if (this->isLoggingLevelVisible(mrpt::system::LVL_DEBUG))
             {
                 for (const auto& sf : state_.stereo_factors)
@@ -308,11 +309,6 @@ void ASLAM_gtsam::spinOnce()
                     sf.second->print();
                 }
             }
-            // Insert active smart factors:
-#if 0
-            state_.newfactors.push_back(
-                state_.activeSmartFactors.begin(),
-                state_.activeSmartFactors.end());
 #endif
             {
                 ProfilerEntry tle(profiler_, "spinOnce.isam2_update");
@@ -516,6 +512,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
     state_.kf_has_value.insert(state_.root_kf_id);
 
     mola2gtsam_register_new_kf(state_.root_kf_id);
+    state_.last_created_kf_id = state_.root_kf_id;
 
     // Next, we can create the actual Key-frame (with observations, etc.)
     // relative to the global root frame.
@@ -523,7 +520,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
     // so it shows up attached to the origin of coordinates.
     auto new_id = internal_addKeyFrame_Regular(i);
 
-    internal_add_gtsam_prior_pose(new_id);
+    internal_add_gtsam_prior_vel(new_id);
 
     switch (params_.state_vector)
     {
@@ -643,14 +640,24 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
     // in case no other Factor makes things easier:
     // Dont add this KF to the list `kf_has_value`, since it's created, but
     // doesn't have an actual "quality" initial value.
+    bool init_value_added = false;
     if (state_.last_created_kf_id != mola::INVALID_ID)
     {
         const gtsam::Key last_pose_key =
             state_.mola2gtsam.at(state_.last_created_kf_id)[KF_KEY_POSE];
 
-        const auto it_prev = state_.newvalues.find(last_pose_key);
-        if (it_prev != state_.newvalues.end())
+        bool have_prev_value = false;
+        auto it_prev         = state_.last_values.find(last_pose_key);
+        if (it_prev != state_.last_values.end())
+            have_prev_value = true;
+        else if (it_prev = state_.newvalues.find(last_pose_key);
+                 it_prev != state_.newvalues.end())
+            have_prev_value = true;
+
+        if (have_prev_value)
         {
+            init_value_added = true;
+
             // Init values:
             switch (params_.state_vector)
             {
@@ -681,6 +688,12 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
         }
     }
 
+    if (!init_value_added)
+    {
+        MRPT_LOG_WARN_STREAM(
+            "Creating KF #" << new_kf_id << " without a good initial guess.");
+    }
+
     mola2gtsam_register_new_kf(new_kf_id);
 
     // Add a dynamics factor, if the time difference between this new KF
@@ -699,7 +712,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
     }
 
     // If we dont have dynamics, add a dynamic prior at least:
-    if (!new_kf_dyn_constrained) internal_add_gtsam_prior_pose(new_kf_id);
+    if (!new_kf_dyn_constrained) internal_add_gtsam_prior_vel(new_kf_id);
 
     state_.last_created_kf_id     = new_kf_id;
     state_.last_created_kf_id_tim = i.timestamp;
@@ -1266,7 +1279,7 @@ void ASLAM_gtsam::onQuit()
 
     MRPT_END
 }
-void ASLAM_gtsam::internal_add_gtsam_prior_pose(const mola::id_t kf_id)
+void ASLAM_gtsam::internal_add_gtsam_prior_vel(const mola::id_t kf_id)
 {
     using namespace gtsam::symbol_shorthand;  // X(), V()
 
