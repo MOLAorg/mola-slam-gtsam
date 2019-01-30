@@ -172,9 +172,17 @@ class ASLAM_gtsam : public BackEndBase
 
     void internal_add_gtsam_prior_pose(const mola::id_t kf_id);
 
+    struct whole_path_t
+    {
+        mrpt::poses::CPose3DInterpolator                        poses;
+        std::map<mrpt::Clock::time_point, mrpt::math::TTwist3D> twists;
+        mola::fast_map<mola::id_t, mrpt::Clock::time_point>     id2time;
+        mola::fast_map<mrpt::Clock::time_point, mola::id_t>     time2id;
+    };
+
     /** Returns a list with all keyframes and, if
      * save_trajectory_file_prefix!="", all non keyframes. */
-    mrpt::poses::CPose3DInterpolator reconstruct_whole_path() const;
+    whole_path_t reconstruct_whole_path() const;
 
     /** Latest localization */
     std::mutex                         latest_localization_data_mtx_;

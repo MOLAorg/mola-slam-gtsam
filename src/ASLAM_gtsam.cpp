@@ -259,8 +259,9 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
     {
         gtsam::ISAM2Params parameters;
         parameters.relinearizeThreshold = 0.1;
-        parameters.relinearizeSkip      = 5;
+        parameters.relinearizeSkip      = 1;
         // parameters.cacheLinearizedFactors = false;
+        // parameters.factorization = gtsam::ISAM2Params::QR;
         // parameters.enableDetailedResults  = false;
 
         state_.isam2 = std::make_unique<gtsam::ISAM2>(parameters);
@@ -319,11 +320,13 @@ void ASLAM_gtsam::spinOnce()
 
             {
                 ProfilerEntry tle(profiler_, "spinOnce.isam2_calcEstimate");
-                result = state_.isam2->calculateEstimate();
-                // result = state_.isam2->calculateBestEstimate();
+                // result = state_.isam2->calculateEstimate();
+                result = state_.isam2->calculateBestEstimate();
             }
 
             state_.last_values = result;
+
+            // gtsam::Marginals marginals(graph, result);
 
             // If we processed a "newvalue" that was the first gross estimate of
             // a KF, it was not marked as "already existing" in kf_has_value, in
@@ -346,7 +349,7 @@ void ASLAM_gtsam::spinOnce()
             }
 
             // reset accumulators of new slam factors:
-            state_.newfactors = gtsam::NonlinearFactorGraph();
+            state_.newfactors.resize(0);
             state_.newvalues.clear();
         }
     }
@@ -580,18 +583,43 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
         return it_kf->second;
     }
 
-    mola::RelPose3KF new_kf;
-    new_kf.base_id_   = state_.root_kf_id;
-    new_kf.timestamp_ = i.timestamp;
+    MRPT_TODO("refactor this to avoid code duplication -> template?");
+    mola::Entity new_ent;
+    switch (params_.state_vector)
+    {
+        case StateVectorType::SE3:
+        {
+            mola::RelPose3KF new_kf;
+            new_kf.base_id_   = state_.root_kf_id;
+            new_kf.timestamp_ = i.timestamp;
+            // Copy the raw observations (shallow copy):
+            if (i.observations)
+                new_kf.raw_observations_ =
+                    mrpt::obs::CSensoryFrame::Create(i.observations.value());
+            new_ent = std::move(new_kf);
+        }
+        break;
+        case StateVectorType::DynSE3:
+        {
+            RelDynPose3KF new_kf;
+            new_kf.base_id_   = state_.root_kf_id;
+            new_kf.timestamp_ = i.timestamp;
+            // Copy the raw observations (shallow copy):
+            if (i.observations)
+                new_kf.raw_observations_ =
+                    mrpt::obs::CSensoryFrame::Create(i.observations.value());
+            new_ent = std::move(new_kf);
+        }
+        break;
 
-    // Copy the raw observations (shallow copy):
-    if (i.observations)
-        new_kf.raw_observations_ =
-            mrpt::obs::CSensoryFrame::Create(i.observations.value());
+        default:
+            THROW_EXCEPTION("TODO");
+            break;
+    };
 
     // Add to the WorldModel:
     worldmodel_->entities_lock_for_write();
-    const auto new_kf_id = worldmodel_->entity_emplace_back(new_kf);
+    const auto new_kf_id = worldmodel_->entity_emplace_back(std::move(new_ent));
     worldmodel_->entities_unlock_for_write();
 
     // Add to timestamp register:
@@ -624,7 +652,8 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
                     state_.newvalues.insert(key_kf_pose, it_prev->value);
 
                     const gtsam::Vector3 vel0 = gtsam::Z_3x1;
-                    state_.newvalues.insert(key_kf_vel, vel0);
+                    if (!state_.newvalues.exists(key_kf_vel))
+                        state_.newvalues.insert(key_kf_vel, vel0);
                 }
                 break;
                 case StateVectorType::DynSE2:
@@ -1131,11 +1160,12 @@ void ASLAM_gtsam::mola2gtsam_register_new_kf(const mola::id_t kf_id)
     state_.gtsam2mola[KF_KEY_VEL][vel_key]   = kf_id;
 }
 
-mrpt::poses::CPose3DInterpolator ASLAM_gtsam::reconstruct_whole_path() const
+ASLAM_gtsam::whole_path_t ASLAM_gtsam::reconstruct_whole_path() const
 {
     MRPT_START
 
     using mrpt::math::TPose3D;
+    using mrpt::math::TTwist3D;
     using mrpt::poses::CPose3D;
     using mrpt::poses::CPose3DInterpolator;
 
@@ -1145,21 +1175,22 @@ mrpt::poses::CPose3DInterpolator ASLAM_gtsam::reconstruct_whole_path() const
     // member.
 
     // 1st pass: key-frames:
-    CPose3DInterpolator                                 path;
-    mola::fast_map<mola::id_t, mrpt::Clock::time_point> id2time;
+    whole_path_t path;
 
     worldmodel_->entities_lock_for_read();
 
     const auto lst_kf_ids = worldmodel_->entity_all_ids();
     for (auto id : lst_kf_ids)
     {
-        const auto&   e   = worldmodel_->entity_by_id(id);
-        const TPose3D p   = mola::entity_get_pose(e);
-        const auto    tim = mola::entity_get_timestamp(e);
+        const auto&    e   = worldmodel_->entity_by_id(id);
+        const TPose3D  p   = mola::entity_get_pose(e);
+        const TTwist3D tw  = mola::entity_get_twist(e);
+        const auto     tim = mola::entity_get_timestamp(e);
 
-        id2time[id] = tim;
-        path.insert(tim, p);
-        std::fixed(std::cout);
+        path.id2time[id]  = tim;
+        path.time2id[tim] = id;
+        path.poses.insert(tim, p);
+        path.twists[tim] = tw;
     }
 
     worldmodel_->entities_unlock_for_read();
@@ -1172,13 +1203,14 @@ mrpt::poses::CPose3DInterpolator ASLAM_gtsam::reconstruct_whole_path() const
 
         // if we have a KF for this timestamp, the KF is more trustful since
         // it underwent optimization:
-        if (path.find(tim) != path.end()) continue;
+        if (path.poses.find(tim) != path.poses.end()) continue;
 
         // otherwise, we have a non KF: compute its pose wrt some other KF:
         TPose3D abs_pose;
-        path.at(id2time.at(li.reference_kf)).composePose(li.pose, abs_pose);
+        path.poses.at(path.id2time.at(li.reference_kf))
+            .composePose(li.pose, abs_pose);
 
-        path.insert(tim, abs_pose);
+        path.poses.insert(tim, abs_pose);
     }
 
     return path;
@@ -1197,13 +1229,26 @@ void ASLAM_gtsam::onQuit()
     // save path?
     if (!params_.save_trajectory_file_prefix.empty())
     {
-        const CPose3DInterpolator path = reconstruct_whole_path();
+        const auto path = reconstruct_whole_path();
 
         // Save in MRPT CPose3DInterpolator format:
-        const auto fil = params_.save_trajectory_file_prefix + "_path.txt"s;
-        MRPT_LOG_WARN_STREAM("Saving final estimated trajectory to: " << fil);
+        const auto filp = params_.save_trajectory_file_prefix + "_path.txt"s;
+        MRPT_LOG_WARN_STREAM("Saving final estimated poses to: " << filp);
+        path.poses.saveToTextFile(filp);
 
-        path.saveToTextFile(fil);
+        // Save twist too:
+        const auto filt = params_.save_trajectory_file_prefix + "_twists.txt"s;
+        MRPT_LOG_WARN_STREAM("Saving final estimated twists to: " << filt);
+        std::ofstream f(filt);
+        if (f.is_open())
+        {
+            f << "% timestamp vx vy vz wx wy wz\n";
+            for (const auto& d : path.twists)
+                f << mrpt::format(
+                    "%.06f %18.04f %18.04f %18.04f %18.04f %18.04f %18.04f\n",
+                    mrpt::Clock::toDouble(d.first), d.second.vx, d.second.vy,
+                    d.second.vz, d.second.wx, d.second.wy, d.second.wz);
+        }
 
     }  // end save path
 
@@ -1213,7 +1258,7 @@ void ASLAM_gtsam::internal_add_gtsam_prior_pose(const mola::id_t kf_id)
 {
     using namespace gtsam::symbol_shorthand;  // X(), V()
 
-    const double prior_std_vel = 10.0;  // [m/s]
+    const double prior_std_vel = 0.5;  // [m/s]
 
     const auto key_kf_vel = V(kf_id);
 
@@ -1231,7 +1276,11 @@ void ASLAM_gtsam::internal_add_gtsam_prior_pose(const mola::id_t kf_id)
             const gtsam::Vector3 vel0     = gtsam::Z_3x1;
             const gtsam::Vector3 vel_stds = prior_std_vel * gtsam::ones(3, 1);
             // First actual KeyFrame:
-            state_.newvalues.insert(key_kf_vel, vel0);
+            if (!state_.newvalues.exists(key_kf_vel))
+                state_.newvalues.insert(key_kf_vel, vel0);
+            else
+                state_.newvalues.update(key_kf_vel, vel0);
+
             state_.newfactors
                 .emplace_shared<gtsam::PriorFactor<gtsam::Velocity3>>(
                     key_kf_vel, vel0,
