@@ -115,8 +115,15 @@ class ASLAM_gtsam : public BackEndBase
         gtsam::NonlinearFactorGraph newfactors;
         gtsam::Values               newvalues;
         std::set<mola::id_t>        kf_has_value;
+        gtsam::Values               last_values;
 
-        gtsam::Values last_values;
+        template <class T>
+        T at_new_or_last_values(const gtsam::Key& k) const
+        {
+            if (last_values.exists(k)) return last_values.at<T>(k);
+            if (newvalues.exists(k)) return newvalues.at<T>(k);
+            throw gtsam::ValuesKeyDoesNotExist("at_new_or_last_values", k);
+        }
 
         /** History of vehicle poses over time (stored in
          * params_.save_trajectory_file_prefix!="").
@@ -134,7 +141,15 @@ class ASLAM_gtsam : public BackEndBase
         /** Absolute coordinates single reference frame (WorldModel index) */
         id_t root_kf_id{mola::INVALID_ID};
 
-        id_t                    last_created_kf_id{mola::INVALID_ID};
+        id_t last_created_kf_id{mola::INVALID_ID};
+        id_t former_last_created_kf_id{mola::INVALID_ID};
+
+        void updateLastCreatedKF(id_t id)
+        {
+            former_last_created_kf_id = last_created_kf_id;
+            last_created_kf_id        = id;
+        }
+
         mrpt::Clock::time_point last_created_kf_id_tim{INVALID_TIMESTAMP};
 
         /** Map between mola WorldModel KF indices and the corresponding gtsam
@@ -153,6 +168,8 @@ class ASLAM_gtsam : public BackEndBase
         std::atomic_bool smart_factors_modified{false};
 
         std::map<mrpt::Clock::time_point, mola::id_t> time2kf;
+
+        std::vector<mola::SmartFactorIMU*> active_imu_factors;
     };
 
     SLAM_state state_;
@@ -165,6 +182,7 @@ class ASLAM_gtsam : public BackEndBase
     fid_t addFactor(const FactorDynamicsConstVel& f);
     fid_t addFactor(const FactorStereoProjectionPose& f);
     fid_t addFactor(const SmartFactorStereoProjectionPose& f);
+    fid_t addFactor(const SmartFactorIMU& f);
 
     mola::id_t internal_addKeyFrame_Root(const ProposeKF_Input& i);
     mola::id_t internal_addKeyFrame_Regular(const ProposeKF_Input& i);

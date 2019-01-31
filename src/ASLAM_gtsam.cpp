@@ -299,11 +299,7 @@ struct IMUHelper
 
 }  // namespace gtsam
 
-#define USE_IMU
-
-#if defined(USE_IMU)
 gtsam::IMUHelper imu;
-#endif
 
 // ----------------------------------------------
 
@@ -377,34 +373,6 @@ void ASLAM_gtsam::spinOnce()
         {
             state_.smart_factors_modified = false;
 
-#ifdef USE_IMU
-            const auto kf_m1  = state_.last_created_kf_id - 1,
-                       kf_cur = state_.last_created_kf_id;
-            MRPT_LOG_DEBUG_STREAM(
-                "Creating IMU factor KFs: #" << kf_m1 << " <-> " << kf_cur);
-
-            // "i 1 0.449805 0.346924 10.0536 0.00744958 0.00159634 0.00478901"
-            double ax = 0.01, ay = 0.001, az = 9.87;
-            double gx = 0.00744958, gy = 0.00159634, gz = 0.00478901;
-            double dt = 1 / 800.0;  // IMU at ~800Hz
-
-            gtsam::Vector3 acc(ax, ay, az);
-            gtsam::Vector3 gyr(gx, gy, gz);
-            imu.preintegrated->integrateMeasurement(acc, gyr, dt);
-
-            // Once per optimization loop:
-            // imu.preintegrated->print();
-
-            using gtsam::symbol_shorthand::B;
-            using gtsam::symbol_shorthand::V;
-            using gtsam::symbol_shorthand::X;
-
-            gtsam::CombinedImuFactor imuFactor(
-                X(kf_m1), V(kf_m1), X(kf_cur), V(kf_m1), B(kf_m1), B(kf_cur),
-                *imu.preintegrated);
-            state_.newfactors.add(imuFactor);
-#endif
-
 #if 0
             // Enforce re-linearization of all smart factors?
             if (!state_.last_values.empty())
@@ -460,21 +428,6 @@ void ASLAM_gtsam::spinOnce()
                 }
             }
 
-#ifdef USE_IMU
-            const auto lastFrame = state_.last_created_kf_id;
-            ASSERT_(lastFrame != mola::INVALID_ID);
-
-            // Reset IMU integrator:
-            imu.propState =
-                imu.preintegrated->predict(imu.prevState, imu.prevBias);
-            imu.prevState = gtsam::NavState(
-                state_.last_values.at<gtsam::Pose3>(X(lastFrame)),
-                state_.last_values.at<gtsam::Vector3>(V(lastFrame)));
-            imu.prevBias = state_.last_values.at<gtsam::imuBias::ConstantBias>(
-                B(lastFrame));
-            imu.preintegrated->resetIntegrationAndSetBias(imu.prevBias);
-#endif
-
             // reset accumulators of new slam factors:
             // state_.newfactors.resize(0);
             state_.newvalues.clear();
@@ -483,6 +436,10 @@ void ASLAM_gtsam::spinOnce()
     else
     {
         auto lock = lockHelper(isam2_lock_);
+
+        state_.newfactors.print("factors =====================\n");
+        state_.newvalues.print("values =====================\n");
+
         if (!state_.newfactors.empty())
         {
             ProfilerEntry tle(
@@ -496,12 +453,12 @@ void ASLAM_gtsam::spinOnce()
         state_.newvalues   = result;
         state_.last_values = state_.newvalues;
 
+#if 0
         gtsam::Marginals marginals(state_.newfactors, result);
 
         using gtsam::symbol_shorthand::V;
         using gtsam::symbol_shorthand::X;
 
-#if 0
         for (const auto kv : state_.last_values)
         {
             std::cout << "cov key: " << kv.key << "\n"
@@ -642,9 +599,10 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
     // and also for the new_id , but that's done indirectly via addFactor() (see
     // below).
     state_.kf_has_value.insert(state_.root_kf_id);
-
     mola2gtsam_register_new_kf(state_.root_kf_id);
-    state_.last_created_kf_id = state_.root_kf_id;
+    // Don't call state_.updateLastCreatedKF() for ROOT, since it's not an
+    // actual KF, just a reference of coordinates.
+    // state_.last_created_kf_id = state_.root_kf_id;
 
     // Next, we can create the actual Key-frame (with observations, etc.)
     // relative to the global root frame.
@@ -702,20 +660,23 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
     }
 
     mola2gtsam_register_new_kf(new_id);
-    state_.last_created_kf_id = new_id;
 
-#ifdef USE_IMU
-    // Bias prior
-    state_.newfactors.add(gtsam::PriorFactor<gtsam::imuBias::ConstantBias>(
-        B(state_.root_kf_id), imu.priorImuBias, imu.biasNoiseModel));
-    state_.newvalues.insert(B(state_.root_kf_id), imu.priorImuBias);
+    MRPT_LOG_DEBUG_STREAM("updateLastCreatedKF: " << new_id);
+    state_.updateLastCreatedKF(new_id);
 
-    // Velocity prior - assume stationary
-    state_.newfactors.add(gtsam::PriorFactor<gtsam::Vector3>(
-        V(state_.root_kf_id), gtsam::Vector3(0, 0, 0), imu.velocityNoiseModel));
+    if (!state_.active_imu_factors.empty())
+    {
+        // state_.newvalues: B() & V() already created in
+        // internal_addKeyFrame_Regular() above. Just add the prior factors:
 
-    state_.newvalues.insert(V(state_.root_kf_id), gtsam::Vector3(0, 0, 0));
-#endif
+        // Bias prior
+        state_.newfactors.add(gtsam::PriorFactor<gtsam::imuBias::ConstantBias>(
+            B(new_id), imu.priorImuBias, imu.biasNoiseModel));
+
+        // Velocity prior - assume stationary
+        state_.newfactors.add(gtsam::PriorFactor<gtsam::Vector3>(
+            V(new_id), gtsam::Vector3(0, 0, 0), imu.velocityNoiseModel));
+    }
 
     return new_id;
 
@@ -833,10 +794,14 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
         }
     }
 
-#ifdef USE_IMU
-    state_.newvalues.insert(V(new_kf_id), gtsam::Vector3(0, 0, 0));
-    state_.newvalues.insert(B(new_kf_id), imu.prevBias);
-#endif
+    if (!state_.active_imu_factors.empty())
+    {
+        if (!state_.newvalues.exists(V(new_kf_id)))
+            state_.newvalues.insert(V(new_kf_id), gtsam::Vector3(0, 0, 0));
+
+        if (!state_.newvalues.exists(B(new_kf_id)))
+            state_.newvalues.insert(B(new_kf_id), imu.prevBias);
+    }
 
     if (!init_value_added)
     {
@@ -848,26 +813,46 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
 
     // Add a dynamics factor, if the time difference between this new KF
     // and the latest one is small enough, and we are not already using an IMU:
-    bool new_kf_dyn_constrained = false;
-#if !defined(USE_IMU)
     if (state_.last_created_kf_id_tim != INVALID_TIMESTAMP)
     {
-        const double kf2kf_tim = mrpt::system::timeDifference(
-            state_.last_created_kf_id_tim, i.timestamp);
-        if (kf2kf_tim < params_.max_interval_between_kfs_for_dynamic_model)
+        // Only if we dont have an IMU:
+        if (state_.active_imu_factors.empty() ||
+            state_.former_last_created_kf_id == INVALID_ID)
         {
-            FactorDynamicsConstVel fDyn(state_.last_created_kf_id, new_kf_id);
-            addFactor(fDyn);
-            new_kf_dyn_constrained = true;
+            const double kf2kf_tim = mrpt::system::timeDifference(
+                state_.last_created_kf_id_tim, i.timestamp);
+            if (kf2kf_tim < params_.max_interval_between_kfs_for_dynamic_model)
+            {
+                FactorDynamicsConstVel fDyn(
+                    state_.last_created_kf_id, new_kf_id);
+                addFactor(fDyn);
+            }
+        }
+        else
+        {
+            ASSERT_(state_.last_created_kf_id != INVALID_ID);
+            ASSERT_(state_.former_last_created_kf_id != INVALID_ID);
+
+            MRPT_LOG_WARN_STREAM(
+                "new_kf_id: " << new_kf_id << " last_created_kf_id="
+                              << state_.last_created_kf_id
+                              << " former_last_created_kf_id:"
+                              << state_.former_last_created_kf_id);
+
+            for (const auto pIMU : state_.active_imu_factors)
+                pIMU->createIMUFactor(state_.last_created_kf_id, new_kf_id);
         }
     }
+    else
+    {
+        // If we dont have dynamics, add a dynamic prior at least:
+        internal_add_gtsam_prior_vel(new_kf_id);
+    }
 
-#endif
-    // If we dont have dynamics, add a dynamic prior at least:
-    if (!new_kf_dyn_constrained) internal_add_gtsam_prior_vel(new_kf_id);
-
-    state_.last_created_kf_id     = new_kf_id;
+    // This one must be updated here, since it's used in the if() above.
     state_.last_created_kf_id_tim = i.timestamp;
+    MRPT_LOG_DEBUG_STREAM("updateLastCreatedKF: " << new_kf_id);
+    state_.updateLastCreatedKF(new_kf_id);
 
     return new_kf_id;
 
@@ -927,8 +912,9 @@ BackEndBase::AddFactor_Output ASLAM_gtsam::doAddFactor(Factor& newF)
             [&](const SmartFactorStereoProjectionPose& f) {
                 fid = addFactor(f);
             },
+            [&](const SmartFactorIMU& f) { fid = addFactor(f); },
             [this, newF]([[maybe_unused]] auto f) {
-                MRPT_LOG_ERROR("Unknown factor type!");
+                THROW_EXCEPTION("Unknown factor type!");
             },
         },
         newF);
@@ -1481,27 +1467,89 @@ void ASLAM_gtsam::onSmartFactorChanged(
 
     using namespace gtsam::symbol_shorthand;  // X()
 
-    const auto& fst =
-        dynamic_cast<const mola::SmartFactorStereoProjectionPose&>(*f);
+    if (const auto* fstptr =
+            dynamic_cast<const mola::SmartFactorStereoProjectionPose*>(f);
+        fstptr != nullptr)
+    {
+        const auto& fst = *fstptr;
 
-    const auto& all_obs = fst.allObservations();
-    ASSERT_(all_obs.size() > 0);
+        const auto& all_obs = fst.allObservations();
+        ASSERT_(all_obs.size() > 0);
 
-    // We have been called because of the last entry in the list, so process it:
-    const auto& last_obs = *all_obs.rbegin();
+        // We have been called because of the last entry in the list, so process
+        // it:
+        const auto& last_obs = *all_obs.rbegin();
 
-    const auto sp = gtsam::StereoPoint2(
-        last_obs.pixel_coords.x_left, last_obs.pixel_coords.x_right,
-        last_obs.pixel_coords.y);
+        const auto sp = gtsam::StereoPoint2(
+            last_obs.pixel_coords.x_left, last_obs.pixel_coords.x_right,
+            last_obs.pixel_coords.y);
 
-    // MRPT_LOG_DEBUG_STREAM(
-    //"SmartFactorStereoProjectionPose.add(): fid=" << id << " from kf id#"
-    //<< last_obs.observing_kf);
-    state_.smart_factors_modified = true;
+        // MRPT_LOG_DEBUG_STREAM(
+        //"SmartFactorStereoProjectionPose.add(): fid=" << id << " from kf id#"
+        //<< last_obs.observing_kf);
+        state_.smart_factors_modified = true;
 
-    const gtsam::Key pose_key = X(last_obs.observing_kf);
+        const gtsam::Key pose_key = X(last_obs.observing_kf);
 
-    state_.stereo_factors.at(id)->add(sp, pose_key, state_.camera_K);
+        MRPT_TODO("uncomment***");
+        // state_.stereo_factors.at(id)->add(sp, pose_key, state_.camera_K);
+    }
+    else if (const auto* fstptr = dynamic_cast<const mola::SmartFactorIMU*>(f);
+             fstptr != nullptr)
+    {
+        const auto& fimu = *fstptr;
+        switch (fimu.new_state_)
+        {
+            case SmartFactorIMU::NewState::MEASURE:
+            {
+                const gtsam::Vector3 acc(fimu.ax_, fimu.ay_, fimu.az_);
+                const gtsam::Vector3 gyr(fimu.wx_, fimu.wy_, fimu.wz_);
+                imu.preintegrated->integrateMeasurement(acc, gyr, fimu.dt_);
+            }
+            break;
+            case SmartFactorIMU::NewState::FACTOR:
+            {
+                const auto kf_m1  = fimu.prev_pose_kf_;
+                const auto kf_cur = fimu.new_pose_kf_;
+
+                // We cannot create an IMU factor for t=0
+                if (kf_m1 == mola::INVALID_ID) break;
+                ASSERT_(kf_cur != mola::INVALID_ID);
+
+                MRPT_LOG_DEBUG_STREAM(
+                    "Creating IMU factor for KFs: #" << kf_m1 << " ==> "
+                                                     << kf_cur);
+
+                using gtsam::symbol_shorthand::B;
+                using gtsam::symbol_shorthand::V;
+                using gtsam::symbol_shorthand::X;
+
+                MRPT_TODO("Use dynamically-created instead of `imu`");
+
+                gtsam::CombinedImuFactor imuFactor(
+                    X(kf_m1), V(kf_m1), X(kf_cur), V(kf_m1), B(kf_m1),
+                    B(kf_cur), *imu.preintegrated);
+                imuFactor.print("new IMU factor:");
+                state_.newfactors.add(imuFactor);
+
+                // Reset IMU integrator:
+                imu.propState =
+                    imu.preintegrated->predict(imu.prevState, imu.prevBias);
+                imu.prevState = gtsam::NavState(
+                    state_.at_new_or_last_values<gtsam::Pose3>(X(kf_cur)),
+                    state_.at_new_or_last_values<gtsam::Vector3>(V(kf_cur)));
+                imu.prevBias =
+                    state_.at_new_or_last_values<gtsam::imuBias::ConstantBias>(
+                        B(kf_cur));
+                imu.preintegrated->resetIntegrationAndSetBias(imu.prevBias);
+            }
+            break;
+
+            default:
+                THROW_EXCEPTION(
+                    "onChange() called for IMU factor but no new data found");
+        };
+    }
 
     MRPT_END
 }
@@ -1556,11 +1604,36 @@ fid_t ASLAM_gtsam::addFactor(const SmartFactorStereoProjectionPose& f)
     auto factor_ptr = gtsam::SmartStereoProjectionPoseFactor::shared_ptr(
         new gtsam::SmartStereoProjectionPoseFactor(gaussian, params));
 
-    state_.stereo_factors[new_fid] = factor_ptr;
-    state_.newfactors.push_back(factor_ptr);
+    MRPT_TODO("uncomment***");
+    // state_.stereo_factors[new_fid] = factor_ptr;
+    // state_.newfactors.push_back(factor_ptr);
 
     //    MRPT_LOG_DEBUG_STREAM(
     //       "SmartFactorStereoProjectionPose: Created empty. fid=" << new_fid);
+
+    return new_fid;
+
+    MRPT_END
+}
+
+fid_t ASLAM_gtsam::addFactor(const SmartFactorIMU& f)
+{
+    MRPT_START
+    MRPT_LOG_DEBUG("Adding new SmartFactorIMU");
+
+    // Add to the WorldModel:
+    worldmodel_->factors_lock_for_write();
+    const fid_t new_fid = worldmodel_->factor_push_back(f);
+
+    {
+        Factor&               fa = worldmodel_->factor_by_id(new_fid);
+        mola::SmartFactorIMU& sf = std::get<mola::SmartFactorIMU>(fa);
+        state_.active_imu_factors.push_back(&sf);
+    }
+
+    worldmodel_->factors_unlock_for_write();
+
+    MRPT_TODO("Create the IMUHelper here!");
 
     return new_fid;
 
