@@ -150,6 +150,8 @@ class ASLAM_gtsam : public BackEndBase
             mola::fid_t, gtsam::SmartStereoProjectionPoseFactor::shared_ptr>
             stereo_factors;
 
+        std::atomic_bool smart_factors_modified{false};
+
         std::map<mrpt::Clock::time_point, mola::id_t> time2kf;
     };
 

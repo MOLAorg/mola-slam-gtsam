@@ -24,6 +24,7 @@
 // GTSAM second:
 #include <gtsam/base/Matrix.h>
 #include <gtsam/inference/Symbol.h>  // X(), V() symbols
+#include <gtsam/navigation/CombinedImuFactor.h>
 #include <gtsam/navigation/NavState.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/Marginals.h>
@@ -89,9 +90,6 @@ namespace gtsam
 class ConstVelocityFactor
     : public NoiseModelFactor4<Pose3, Velocity3, Pose3, Velocity3>
 {
-   public:
-    //    using T = NavState;
-
    private:
     using This = ConstVelocityFactor;
     using Base = NoiseModelFactor4<Pose3, Velocity3, Pose3, Velocity3>;
@@ -132,9 +130,8 @@ class ConstVelocityFactor
         const std::string&  s,
         const KeyFormatter& keyFormatter = DefaultKeyFormatter) const override
     {
-        std::cout << s << "ConstVelocityBetweenNavState("
-                  << keyFormatter(this->key1()) << ","
-                  << keyFormatter(this->key2()) << ","
+        std::cout << s << "ConstVelocityFactor(" << keyFormatter(this->key1())
+                  << "," << keyFormatter(this->key2()) << ","
                   << keyFormatter(this->key3()) << ","
                   << keyFormatter(this->key4()) << ")\n";
         traits<double>::Print(deltaTime_, "  deltaTime: ");
@@ -206,7 +203,7 @@ class ConstVelocityFactor
     void serialize(ARCHIVE& ar, const unsigned int /*version*/)
     {
         ar& boost::serialization::make_nvp(
-            "RelPoseBetweenNavState",
+            "ConstVelocityFactor",
             boost::serialization::base_object<Base>(*this));
         ar& BOOST_SERIALIZATION_NVP(deltaTime_);
     }
@@ -217,7 +214,96 @@ class ConstVelocityFactor
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
 
+using namespace std;
+using namespace gtsam;
+using symbol_shorthand::B;
+using symbol_shorthand::V;
+using symbol_shorthand::X;
+
+struct IMUHelper
+{
+    IMUHelper()
+    {
+        {
+            auto gaussian = noiseModel::Diagonal::Sigmas(
+                (Vector(6) << Vector3::Constant(5.0e-2),
+                 Vector3::Constant(5.0e-3))
+                    .finished());
+            auto huber = noiseModel::Robust::Create(
+                noiseModel::mEstimator::Huber::Create(1.345), gaussian);
+
+            biasNoiseModel = huber;
+        }
+
+        {
+            auto gaussian = noiseModel::Isotropic::Sigma(3, 0.01);
+            auto huber    = noiseModel::Robust::Create(
+                noiseModel::mEstimator::Huber::Create(1.345), gaussian);
+
+            velocityNoiseModel = huber;
+        }
+
+        // expect IMU to be rotated in image space co-ords
+        auto p = boost::make_shared<PreintegratedCombinedMeasurements::Params>(
+            Vector3(0.0, 9.8, 0.0));
+
+        p->accelerometerCovariance =
+            I_3x3 * pow(0.0565, 2.0);  // acc white noise in continuous
+        p->integrationCovariance =
+            I_3x3 * 1e-9;  // integration uncertainty continuous
+        p->gyroscopeCovariance =
+            I_3x3 * pow(4.0e-5, 2.0);  // gyro white noise in continuous
+        p->biasAccCovariance =
+            I_3x3 * pow(0.00002, 2.0);  // acc bias in continuous
+        p->biasOmegaCovariance =
+            I_3x3 * pow(0.001, 2.0);  // gyro bias in continuous
+        p->biasAccOmegaInt = Matrix::Identity(6, 6) * 1e-5;
+
+        // body to IMU rotation
+        // clang-format off
+        Rot3 iRb(
+            0.036129, -0.998727, 0.035207,
+            0.045417, -0.033553, -0.998404,
+            0.998315, 0.037670, 0.044147);
+        // clang-format on
+
+        // body to IMU translation (meters)
+        Point3 iTb(0, 0, 0);  // 0.03, -0.025, -0.06);
+
+        // body in this example is the left camera
+        p->body_P_sensor = Pose3(iRb, iTb);
+
+        Rot3  prior_rotation = Rot3(I_3x3);
+        Pose3 prior_pose(prior_rotation, Point3(0, 0, 0));
+
+        Vector3 acc_bias(0.0, -0.0942015, 0.0);  // in camera frame
+        Vector3 gyro_bias(-0.00527483, -0.00757152, -0.00469968);
+
+        priorImuBias = imuBias::ConstantBias(acc_bias, gyro_bias);
+
+        prevState = NavState(prior_pose, Vector3(0, 0, 0));
+        propState = prevState;
+        prevBias  = priorImuBias;
+
+        preintegrated = new PreintegratedCombinedMeasurements(p, priorImuBias);
+    }
+
+    imuBias::ConstantBias          priorImuBias;  // assume zero initial bias
+    noiseModel::Robust::shared_ptr velocityNoiseModel;
+    noiseModel::Robust::shared_ptr biasNoiseModel;
+    NavState                       prevState;
+    NavState                       propState;
+    imuBias::ConstantBias          prevBias;
+    PreintegratedCombinedMeasurements* preintegrated;
+};
+
 }  // namespace gtsam
+
+#define USE_IMU
+
+#if defined(USE_IMU)
+gtsam::IMUHelper imu;
+#endif
 
 // ----------------------------------------------
 
@@ -286,8 +372,39 @@ void ASLAM_gtsam::spinOnce()
 
         // smart factors are not re-added to newfactors, but we should
         // re-optimize if needed anyway:
-        if (!state_.newfactors.empty() || !state_.newvalues.empty())
+        if (!state_.newfactors.empty() || !state_.newvalues.empty() ||
+            state_.smart_factors_modified)
         {
+            state_.smart_factors_modified = false;
+
+#ifdef USE_IMU
+            const auto kf_m1  = state_.last_created_kf_id - 1,
+                       kf_cur = state_.last_created_kf_id;
+            MRPT_LOG_DEBUG_STREAM(
+                "Creating IMU factor KFs: #" << kf_m1 << " <-> " << kf_cur);
+
+            // "i 1 0.449805 0.346924 10.0536 0.00744958 0.00159634 0.00478901"
+            double ax = 0.01, ay = 0.001, az = 9.87;
+            double gx = 0.00744958, gy = 0.00159634, gz = 0.00478901;
+            double dt = 1 / 800.0;  // IMU at ~800Hz
+
+            gtsam::Vector3 acc(ax, ay, az);
+            gtsam::Vector3 gyr(gx, gy, gz);
+            imu.preintegrated->integrateMeasurement(acc, gyr, dt);
+
+            // Once per optimization loop:
+            // imu.preintegrated->print();
+
+            using gtsam::symbol_shorthand::B;
+            using gtsam::symbol_shorthand::V;
+            using gtsam::symbol_shorthand::X;
+
+            gtsam::CombinedImuFactor imuFactor(
+                X(kf_m1), V(kf_m1), X(kf_cur), V(kf_m1), B(kf_m1), B(kf_cur),
+                *imu.preintegrated);
+            state_.newfactors.add(imuFactor);
+#endif
+
 #if 0
             // Enforce re-linearization of all smart factors?
             if (!state_.last_values.empty())
@@ -343,8 +460,23 @@ void ASLAM_gtsam::spinOnce()
                 }
             }
 
+#ifdef USE_IMU
+            const auto lastFrame = state_.last_created_kf_id;
+            ASSERT_(lastFrame != mola::INVALID_ID);
+
+            // Reset IMU integrator:
+            imu.propState =
+                imu.preintegrated->predict(imu.prevState, imu.prevBias);
+            imu.prevState = gtsam::NavState(
+                state_.last_values.at<gtsam::Pose3>(X(lastFrame)),
+                state_.last_values.at<gtsam::Vector3>(V(lastFrame)));
+            imu.prevBias = state_.last_values.at<gtsam::imuBias::ConstantBias>(
+                B(lastFrame));
+            imu.preintegrated->resetIntegrationAndSetBias(imu.prevBias);
+#endif
+
             // reset accumulators of new slam factors:
-            state_.newfactors.resize(0);
+            // state_.newfactors.resize(0);
             state_.newvalues.clear();
         }
     }
@@ -563,14 +695,27 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
     {
         mola::FactorRelativePose3 f(
             state_.root_kf_id, new_id, mrpt::math::TPose3D::Identity());
-        f.noise_model_diag_xyz_ = 0.1e-3;
-        f.noise_model_diag_rot_ = mrpt::DEG2RAD(0.001);
+        f.noise_model_diag_xyz_ = 0.1;
+        f.noise_model_diag_rot_ = mrpt::DEG2RAD(0.1);
 
         this->addFactor(f);
     }
 
     mola2gtsam_register_new_kf(new_id);
     state_.last_created_kf_id = new_id;
+
+#ifdef USE_IMU
+    // Bias prior
+    state_.newfactors.add(gtsam::PriorFactor<gtsam::imuBias::ConstantBias>(
+        B(state_.root_kf_id), imu.priorImuBias, imu.biasNoiseModel));
+    state_.newvalues.insert(B(state_.root_kf_id), imu.priorImuBias);
+
+    // Velocity prior - assume stationary
+    state_.newfactors.add(gtsam::PriorFactor<gtsam::Vector3>(
+        V(state_.root_kf_id), gtsam::Vector3(0, 0, 0), imu.velocityNoiseModel));
+
+    state_.newvalues.insert(V(state_.root_kf_id), gtsam::Vector3(0, 0, 0));
+#endif
 
     return new_id;
 
@@ -688,6 +833,11 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
         }
     }
 
+#ifdef USE_IMU
+    state_.newvalues.insert(V(new_kf_id), gtsam::Vector3(0, 0, 0));
+    state_.newvalues.insert(B(new_kf_id), imu.prevBias);
+#endif
+
     if (!init_value_added)
     {
         MRPT_LOG_WARN_STREAM(
@@ -697,8 +847,9 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
     mola2gtsam_register_new_kf(new_kf_id);
 
     // Add a dynamics factor, if the time difference between this new KF
-    // and the latest one is small enough:
+    // and the latest one is small enough, and we are not already using an IMU:
     bool new_kf_dyn_constrained = false;
+#if !defined(USE_IMU)
     if (state_.last_created_kf_id_tim != INVALID_TIMESTAMP)
     {
         const double kf2kf_tim = mrpt::system::timeDifference(
@@ -711,6 +862,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
         }
     }
 
+#endif
     // If we dont have dynamics, add a dynamic prior at least:
     if (!new_kf_dyn_constrained) internal_add_gtsam_prior_vel(new_kf_id);
 
@@ -1345,6 +1497,7 @@ void ASLAM_gtsam::onSmartFactorChanged(
     // MRPT_LOG_DEBUG_STREAM(
     //"SmartFactorStereoProjectionPose.add(): fid=" << id << " from kf id#"
     //<< last_obs.observing_kf);
+    state_.smart_factors_modified = true;
 
     const gtsam::Key pose_key = X(last_obs.observing_kf);
 
@@ -1393,7 +1546,7 @@ fid_t ASLAM_gtsam::addFactor(const SmartFactorStereoProjectionPose& f)
     worldmodel_->factors_unlock_for_write();
 
     MRPT_TODO("Take noise params from f");
-    auto gaussian = gtsam::noiseModel::Isotropic::Sigma(3, 1.0);
+    auto gaussian = gtsam::noiseModel::Isotropic::Sigma(3, 0.1);
 
     gtsam::SmartProjectionParams params(
         gtsam::HESSIAN, gtsam::ZERO_ON_DEGENERACY);
