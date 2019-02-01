@@ -429,7 +429,7 @@ void ASLAM_gtsam::spinOnce()
             }
 
             // reset accumulators of new slam factors:
-            // state_.newfactors.resize(0);
+            state_.newfactors.resize(0);
             state_.newvalues.clear();
         }
     }
