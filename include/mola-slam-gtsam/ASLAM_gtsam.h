@@ -220,6 +220,17 @@ class ASLAM_gtsam : public BackEndBase
     /** This will be run in a dedicated thread inside gui_updater_pool_ */
     void doUpdateDisplay(std::shared_ptr<DisplayInfo> di);
 
+    struct DisplayState
+    {
+        std::set<mola::id_t> kf_checked_decorations;
+        /** List of render decorations for each KF. Stored here
+         * so we can update their pose  */
+        std::map<mola::id_t, mrpt::opengl::CRenderizable::Ptr> kf_decorations;
+        mrpt::opengl::CSetOfObjects::Ptr                       slam_graph_gl;
+    };
+
+    DisplayState display_state_;
+
     mrpt::gui::CDisplayWindow3D::Ptr display_;
     // ----------------------------
 };

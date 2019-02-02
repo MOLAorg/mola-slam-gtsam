@@ -1227,12 +1227,58 @@ void ASLAM_gtsam::doUpdateDisplay(std::shared_ptr<DisplayInfo> di)
             last_kf_pos = di->vizmap.nodes.rbegin()->second;
         }
 
+        // Load "decorations" (OpenGL render objects)
+        // from new keyframes, from the WorldModel:
+        std::vector<CRenderizable::Ptr> pending_add_to_scene;
+        worldmodel_->entities_lock_for_read();
+        for (const auto& id_pose : di->vizmap.nodes)
+        {
+            const mola::id_t id = id_pose.first;
+            if (0 == display_state_.kf_checked_decorations.count(id))
+            {
+                display_state_.kf_checked_decorations.insert(id);
+                const auto& annots = worldmodel_->entity_annotations_by_id(id);
+                MRPT_TODO("add kernel hdr for standarized annotation names");
+                if (const auto it_a = annots.find("render_decoration");
+                    it_a != annots.end())
+                {
+                    const mrpt::serialization::CSerializable::Ptr& o =
+                        it_a->second.value();
+                    const auto gl_obj = mrpt::ptr_cast<CRenderizable>::from(o);
+                    if (gl_obj)
+                    {
+                        display_state_.kf_decorations[id] = gl_obj;
+                        pending_add_to_scene.push_back(gl_obj);
+                    }
+                }
+            }
+        }
+        worldmodel_->entities_unlock_for_read();
+
         {  // lock scene
             COpenGLScene::Ptr      scene;
             CDisplayWindow3DLocker lock(*display_, scene);
 
             // Update scene:
-            scene->clear();
+            if (!display_state_.slam_graph_gl)
+            {
+                auto o = CSetOfObjects::Create();
+                o->setName("SLAM_graph");
+                display_state_.slam_graph_gl = o;
+                scene->insert(o);
+            }
+
+            // New KF decorations?
+            for (const auto& obj : pending_add_to_scene) scene->insert(obj);
+
+            // Update keyframe decoration poses:
+            for (const auto& id_deco : display_state_.kf_decorations)
+            {
+                const mola::id_t id     = id_deco.first;
+                const auto&      gl_ptr = id_deco.second;
+
+                gl_ptr->setPose(di->vizmap.nodes.at(id));
+            }
 
             mrpt::system::TParametersDouble params;
             params["show_ID_labels"]    = 1;
@@ -1240,8 +1286,10 @@ void ASLAM_gtsam::doUpdateDisplay(std::shared_ptr<DisplayInfo> di)
             params["show_edges"]        = 1;
             params["show_node_corners"] = 1;
 
+            display_state_.slam_graph_gl->clear();
             auto gl_graph =
                 mrpt::opengl::graph_tools::graph_visualize(di->vizmap, params);
+            display_state_.slam_graph_gl->insert(gl_graph);
 
             // Draw current latest pose:
             latest_localization_data_mtx_.lock();
@@ -1261,7 +1309,7 @@ void ASLAM_gtsam::doUpdateDisplay(std::shared_ptr<DisplayInfo> di)
                     mrpt::opengl::stock_objects::CornerXYZSimple(1.5f, 4.0f);
 
                 gl_cur_pose->setPose(abs_pose);
-                scene->insert(gl_cur_pose);
+                display_state_.slam_graph_gl->insert(gl_cur_pose);
             }
 
             // Draw velocities:
@@ -1289,10 +1337,8 @@ void ASLAM_gtsam::doUpdateDisplay(std::shared_ptr<DisplayInfo> di)
                 gl_vels->setLineWidth(4.0f);
                 gl_vels->setColor_u8(0x00, 0xff, 0x00, 0xc0);  // RGBA
 
-                scene->insert(gl_vels);
+                display_state_.slam_graph_gl->insert(gl_vels);
             }
-
-            scene->insert(gl_graph);
 
             if (di->current_tim != INVALID_TIMESTAMP)
             {
