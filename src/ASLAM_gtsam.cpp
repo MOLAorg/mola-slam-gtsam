@@ -345,7 +345,7 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
         parameters.relinearizeSkip      = 1;
         // parameters.cacheLinearizedFactors = false;
         // parameters.factorization = gtsam::ISAM2Params::QR;
-        // parameters.enableDetailedResults  = false;
+        parameters.enableDetailedResults = true;
 
         state_.isam2 = std::make_unique<gtsam::ISAM2>(parameters);
     }
@@ -397,7 +397,8 @@ void ASLAM_gtsam::spinOnce()
 #endif
             {
                 ProfilerEntry tle(profiler_, "spinOnce.isam2_update");
-                state_.isam2->update(state_.newfactors, state_.newvalues);
+                isam2_res =
+                    state_.isam2->update(state_.newfactors, state_.newvalues);
             }
 
             {
@@ -476,19 +477,26 @@ void ASLAM_gtsam::spinOnce()
         MRPT_LOG_INFO_STREAM(
             "iSAM2 ran for " << result.size() << " variables.");
 
-        MRPT_TODO("Do it incrementally, so we dont need to send everything");
+        // Send only those variables that have been updated:
+        ASSERT_(isam2_res.detail);
 
         auto lk = lockHelper(keys_map_lock_);
 
         // Send values to the world model:
         worldmodel_->entities_lock_for_write();
-        for (auto key_value : result)
+
+        for (auto keyedStatus : isam2_res.detail->variableStatus)
         {
-            if (auto it_kf = state_.gtsam2mola[KF_KEY_POSE].find(key_value.key);
+            using std::cout;
+            // const auto&       status    = keyedStatus.second;
+            const gtsam::Key&   key   = keyedStatus.first;
+            const gtsam::Value& value = result.at(key);
+
+            if (auto it_kf = state_.gtsam2mola[KF_KEY_POSE].find(key);
                 it_kf != state_.gtsam2mola[KF_KEY_POSE].end())
             {
                 const mola::id_t kf_id   = it_kf->second;
-                gtsam::Pose3     kf_pose = key_value.value.cast<gtsam::Pose3>();
+                gtsam::Pose3     kf_pose = value.cast<gtsam::Pose3>();
 
                 // Dont update the pose of the global reference, fixed to
                 // Identity()
@@ -499,13 +507,11 @@ void ASLAM_gtsam::spinOnce()
                 const auto p               = toTPose3D(kf_pose);
                 state_.vizmap.nodes[kf_id] = mrpt::poses::CPose3D(p);
             }
-            else if (auto it_kf =
-                         state_.gtsam2mola[KF_KEY_VEL].find(key_value.key);
+            else if (auto it_kf = state_.gtsam2mola[KF_KEY_VEL].find(key);
                      it_kf != state_.gtsam2mola[KF_KEY_VEL].end())
             {
-                const mola::id_t kf_id = it_kf->second;
-                gtsam::Velocity3 kf_vel =
-                    key_value.value.cast<gtsam::Velocity3>();
+                const mola::id_t kf_id  = it_kf->second;
+                gtsam::Velocity3 kf_vel = value.cast<gtsam::Velocity3>();
 
                 // worldmodel:
                 updateEntityVel(worldmodel_->entity_by_id(kf_id), kf_vel);
@@ -518,28 +524,28 @@ void ASLAM_gtsam::spinOnce()
         worldmodel_->entities_unlock_for_write();
     }
 
-    if (isam2_res.detail)
+#if 0
+    MRPT_LOG_DEBUG("iSAM2 detail status:");
+    for (auto keyedStatus : isam2_res.detail->variableStatus)
     {
-        for (auto keyedStatus : isam2_res.detail->variableStatus)
-        {
-            using std::cout;
-            const auto& status = keyedStatus.second;
-            gtsam::PrintKey(keyedStatus.first);
-            cout << " {"
-                 << "\n";
-            cout << "reeliminated: " << status.isReeliminated << "\n";
-            cout << "relinearized above thresh: "
-                 << status.isAboveRelinThreshold << "\n";
-            cout << "relinearized involved: " << status.isRelinearizeInvolved
-                 << "\n";
-            cout << "relinearized: " << status.isRelinearized << "\n";
-            cout << "observed: " << status.isObserved << "\n";
-            cout << "new: " << status.isNew << "\n";
-            cout << "in the root clique: " << status.inRootClique << "\n";
-            cout << "}"
-                 << "\n";
-        }
+        using std::cout;
+        const auto& status = keyedStatus.second;
+        gtsam::PrintKey(keyedStatus.first);
+        cout << " {"
+             << "\n";
+        cout << "reeliminated: " << status.isReeliminated << "\n";
+        cout << "relinearized above thresh: " << status.isAboveRelinThreshold
+             << "\n";
+        cout << "relinearized involved: " << status.isRelinearizeInvolved
+             << "\n";
+        cout << "relinearized: " << status.isRelinearized << "\n";
+        cout << "observed: " << status.isObserved << "\n";
+        cout << "new: " << status.isNew << "\n";
+        cout << "in the root clique: " << status.inRootClique << "\n";
+        cout << "}"
+             << "\n";
     }
+#endif
 
     // Show in GUI:
     // -------------------
@@ -596,8 +602,8 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
     using namespace gtsam::symbol_shorthand;  // X(), V()
 
     // We'll insert a prior for the root pose:
-    // and also for the new_id , but that's done indirectly via addFactor() (see
-    // below).
+    // and also for the new_id , but that's done indirectly via addFactor()
+    // (see below).
     state_.kf_has_value.insert(state_.root_kf_id);
     mola2gtsam_register_new_kf(state_.root_kf_id);
     // Don't call state_.updateLastCreatedKF() for ROOT, since it's not an
@@ -694,7 +700,8 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
     if (auto it_kf = state_.time2kf.find(i.timestamp);
         it_kf != state_.time2kf.end())
     {
-        // Yes: return it since we cannot have two KFs for the same timestamp.
+        // Yes: return it since we cannot have two KFs for the same
+        // timestamp.
         return it_kf->second;
     }
 
@@ -812,7 +819,8 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
     mola2gtsam_register_new_kf(new_kf_id);
 
     // Add a dynamics factor, if the time difference between this new KF
-    // and the latest one is small enough, and we are not already using an IMU:
+    // and the latest one is small enough, and we are not already using an
+    // IMU:
     if (state_.last_created_kf_id_tim != INVALID_TIMESTAMP)
     {
         // Only if we dont have an IMU:
@@ -985,7 +993,8 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
     const auto from_pose_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_POSE];
     // (vel keys may be used or not; declare here for convenience anyway)
     const auto to_vel_key = state_.mola2gtsam.at(f.to_kf_)[KF_KEY_VEL];
-    // const auto from_vel_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_VEL];
+    // const auto from_vel_key =
+    // state_.mola2gtsam.at(f.from_kf_)[KF_KEY_VEL];
 
     // Add to list of initial guess (if not done already with a former
     // factor):
@@ -1408,7 +1417,8 @@ void ASLAM_gtsam::onQuit()
             f << "% timestamp vx vy vz wx wy wz\n";
             for (const auto& d : path.twists)
                 f << mrpt::format(
-                    "%.06f %18.04f %18.04f %18.04f %18.04f %18.04f %18.04f\n",
+                    "%.06f %18.04f %18.04f %18.04f %18.04f %18.04f "
+                    "%18.04f\n",
                     mrpt::Clock::toDouble(d.first), d.second.vx, d.second.vy,
                     d.second.vz, d.second.wx, d.second.wy, d.second.wz);
         }
@@ -1476,8 +1486,8 @@ void ASLAM_gtsam::onSmartFactorChanged(
         const auto& all_obs = fst.allObservations();
         ASSERT_(all_obs.size() > 0);
 
-        // We have been called because of the last entry in the list, so process
-        // it:
+        // We have been called because of the last entry in the list, so
+        // process it:
         const auto& last_obs = *all_obs.rbegin();
 
         const auto sp = gtsam::StereoPoint2(
@@ -1485,7 +1495,8 @@ void ASLAM_gtsam::onSmartFactorChanged(
             last_obs.pixel_coords.y);
 
         // MRPT_LOG_DEBUG_STREAM(
-        //"SmartFactorStereoProjectionPose.add(): fid=" << id << " from kf id#"
+        //"SmartFactorStereoProjectionPose.add(): fid=" << id << " from kf
+        // id#"
         //<< last_obs.observing_kf);
         state_.smart_factors_modified = true;
 
@@ -1547,7 +1558,8 @@ void ASLAM_gtsam::onSmartFactorChanged(
 
             default:
                 THROW_EXCEPTION(
-                    "onChange() called for IMU factor but no new data found");
+                    "onChange() called for IMU factor but no new data "
+                    "found");
         };
     }
 
@@ -1609,7 +1621,8 @@ fid_t ASLAM_gtsam::addFactor(const SmartFactorStereoProjectionPose& f)
     // state_.newfactors.push_back(factor_ptr);
 
     //    MRPT_LOG_DEBUG_STREAM(
-    //       "SmartFactorStereoProjectionPose: Created empty. fid=" << new_fid);
+    //       "SmartFactorStereoProjectionPose: Created empty. fid=" <<
+    //       new_fid);
 
     return new_fid;
 
