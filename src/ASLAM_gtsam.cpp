@@ -24,6 +24,7 @@
 // GTSAM second:
 #include <gtsam/base/Matrix.h>
 #include <gtsam/inference/Symbol.h>  // X(), V() symbols
+#include <gtsam/linear/NoiseModel.h>
 #include <gtsam/navigation/CombinedImuFactor.h>
 #include <gtsam/navigation/NavState.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
@@ -989,6 +990,10 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
          std_xyz)
             .finished());
 
+    MRPT_TODO("robust kernel: make optional");
+    auto robust_noise_model = gtsam::noiseModel::Robust::Create(
+        gtsam::noiseModel::mEstimator::Huber::Create(1.345), noise_relpose);
+
     const auto to_pose_key   = state_.mola2gtsam.at(f.to_kf_)[KF_KEY_POSE];
     const auto from_pose_key = state_.mola2gtsam.at(f.from_kf_)[KF_KEY_POSE];
     // (vel keys may be used or not; declare here for convenience anyway)
@@ -1045,7 +1050,7 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
         case StateVectorType::DynSE3:
             state_.newfactors
                 .emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
-                    from_pose_key, to_pose_key, measure, noise_relpose);
+                    from_pose_key, to_pose_key, measure, robust_noise_model);
             break;
         default:
             THROW_EXCEPTION("Unhandled state vector type");
