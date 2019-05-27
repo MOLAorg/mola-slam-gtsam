@@ -165,7 +165,7 @@ class ConstVelocityFactor
         if (H1)
         {
             auto& H1v = H1.value();
-            H1v.zeros(6, 6);
+            H1v.setZero(6, 6);
             H1v.block<3, 3>(0, 3) = gtsam::I_3x3;
         }
         if (H2)
@@ -178,7 +178,7 @@ class ConstVelocityFactor
         if (H3)
         {
             auto& H3v = H3.value();
-            H3v.zeros(6, 6);
+            H3v.setZero(6, 6);
             H3v.block<3, 3>(0, 3) = -gtsam::I_3x3;
         }
         if (H4)
