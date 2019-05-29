@@ -29,6 +29,18 @@
 
 namespace mola
 {
+/** Three-ways map between IDs: feature_id, gtsam_id, MOLA_id */
+template <
+    typename feature_id_t, typename gtsam_id_t = std::size_t,
+    typename mola_id_t = mola::fid_t>
+struct TriMap
+{
+    // std::map<feature_id_t, gtsam_id_t> feature2gtsam;
+    // std::map<feature_id_t, mola_id_t>  feature2mola;
+    std::map<gtsam_id_t, mola_id_t> gtsam2mola;
+    std::map<mola_id_t, gtsam_id_t> mola2gtsam;
+};
+
 /** Reference implementation of absolute-coordinates SLAM with GTSAM factor
  * graphs.
  * See docs in: \ref mola_slam_gtsam_grp
@@ -122,10 +134,14 @@ class ASLAM_gtsam : public BackEndBase
         std::unique_ptr<gtsam::ISAM2> isam2;
 
         /** Pending new elements to add to the map */
-        gtsam::NonlinearFactorGraph newfactors;
-        gtsam::Values               newvalues;
-        std::set<mola::id_t>        kf_has_value;
-        gtsam::Values               last_values;
+        gtsam::NonlinearFactorGraph                       newfactors;
+        gtsam::Values                                     newvalues;
+        gtsam::FastMap<gtsam::FactorIndex, gtsam::KeySet> changedSmartFactors;
+        /** Map: new factor index in newfactors ==> MOLA factor ID */
+        std::map<std::size_t, mola::fid_t> newFactor2molaid;
+
+        std::set<mola::id_t> kf_has_value;
+        gtsam::Values        last_values;
 
         template <class T>
         T at_new_or_last_values(const gtsam::Key& k) const
@@ -135,7 +151,7 @@ class ASLAM_gtsam : public BackEndBase
             throw gtsam::ValuesKeyDoesNotExist("at_new_or_last_values", k);
         }
 
-        /** History of vehicle poses over time (stored in
+        /** History of vehicle poses over time (stored if
          * params_.save_trajectory_file_prefix!="").
          * Note that this stores relative poses for all frames, keyframes and
          * non-keyframes. We keep them relative so we can reconstruct the
@@ -170,12 +186,18 @@ class ASLAM_gtsam : public BackEndBase
         /** Inverse map for `mola2gtsam` (indexed by gtsam *pose* ID) */
         std::array<std::map<gtsam::Key, mola::id_t>, KF_KEY_COUNT> gtsam2mola;
 
-        gtsam::Cal3_S2Stereo::shared_ptr camera_K;
-        std::map<
-            mola::fid_t, gtsam::SmartStereoProjectionPoseFactor::shared_ptr>
-            stereo_factors;
+        struct StereoSmartFactorState
+        {
+            gtsam::Cal3_S2Stereo::shared_ptr camera_K;
 
-        std::atomic_bool smart_factors_modified{false};
+            std::map<
+                mola::fid_t, gtsam::SmartStereoProjectionPoseFactor::shared_ptr>
+                factors;
+
+            /** Relationship between ID numbers in the different systems */
+            TriMap<std::size_t> ids;
+        };
+        StereoSmartFactorState stereo_factors;
 
         std::map<mrpt::Clock::time_point, mola::id_t> time2kf;
 

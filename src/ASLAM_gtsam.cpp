@@ -16,17 +16,16 @@
 #include <mola-kernel/variant_helper.h>
 #include <mola-kernel/yaml_helpers.h>
 #include <mola-slam-gtsam/ASLAM_gtsam.h>
+#include <mola-slam-gtsam/ConstVelocityFactorSE3.h>
+#include <mola-slam-gtsam/gtsam_mola_bridge.h>
 #include <mrpt/opengl/CSetOfLines.h>  // TODO: Remove after vizmap module
 #include <mrpt/opengl/graph_tools.h>  // TODO: Remove after vizmap module
 #include <mrpt/opengl/stock_objects.h>  // TODO: Remove after vizmap module
 #include <yaml-cpp/yaml.h>
 
 // GTSAM second:
-#include <gtsam/base/Matrix.h>
 #include <gtsam/inference/Symbol.h>  // X(), V() symbols
-#include <gtsam/linear/NoiseModel.h>
 #include <gtsam/navigation/CombinedImuFactor.h>
-#include <gtsam/navigation/NavState.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/slam/BetweenFactor.h>
@@ -35,195 +34,8 @@
 
 using namespace mola;
 
-MRPT_TODO("Move all these aux funcs somewhere else");
-
-static gtsam::Pose3 toPose3(const mrpt::math::TPose3D& p)
-{
-    gtsam::Pose3                  ret;
-    mrpt::math::CQuaternionDouble q;
-    mrpt::poses::CPose3D(p).getAsQuaternion(q);
-    return gtsam::Pose3(
-        gtsam::Rot3::Quaternion(q.r(), q.x(), q.y(), q.z()),
-        gtsam::Point3(p.x, p.y, p.z));
-}
-
-static mrpt::math::TPose3D toTPose3D(const gtsam::Pose3& p)
-{
-    const auto HM = p.matrix();
-    const auto H  = mrpt::math::CMatrixDouble44(HM);
-    return mrpt::poses::CPose3D(H).asTPose();
-}
-
-static gtsam::Point3 toPoint3(const mrpt::math::TPoint3D& p)
-{
-    return gtsam::Point3(p.x, p.y, p.z);
-}
-
-static mrpt::math::TTwist3D toTTwist3D(const gtsam::Velocity3& v)
-{
-    mrpt::math::TTwist3D t;
-    t.vx = v.x();
-    t.vy = v.y();
-    t.vz = v.z();
-    return t;
-}
-
-static void updateEntityPose(mola::Entity& e, const gtsam::Pose3& x)
-{
-    mola::entity_update_pose(e, toTPose3D(x));
-}
-
-static std::array<double, 3> toVelArray(const gtsam::Velocity3& v)
-{
-    return {v.x(), v.y(), v.z()};
-}
-
-static void updateEntityVel(mola::Entity& e, const gtsam::Velocity3& v)
-{
-    mola::entity_update_vel(e, toVelArray(v));
-}
-
 namespace gtsam
 {
-/**
- * Factor for constant velocity model between two pairs Pose3+Velocity3
- */
-class ConstVelocityFactor
-    : public NoiseModelFactor4<Pose3, Velocity3, Pose3, Velocity3>
-{
-   private:
-    using This = ConstVelocityFactor;
-    using Base = NoiseModelFactor4<Pose3, Velocity3, Pose3, Velocity3>;
-
-    using Measure = double;
-
-    /** Time between the states key1 & key2 */
-    double deltaTime_;
-
-   public:
-    // shorthand for a smart pointer to a factor
-    using shared_ptr = boost::shared_ptr<ConstVelocityFactor>;
-
-    /** default constructor - only use for serialization */
-    ConstVelocityFactor() {}
-
-    /** Constructor.  */
-    ConstVelocityFactor(
-        Key pose1, Key vel1, Key pose2, Key vel2, const double deltaTime,
-        const SharedNoiseModel& model)
-        : Base(model, pose1, vel1, pose2, vel2), deltaTime_(deltaTime)
-    {
-    }
-
-    virtual ~ConstVelocityFactor() override = default;
-
-    /// @return a deep copy of this factor
-    virtual gtsam::NonlinearFactor::shared_ptr clone() const override
-    {
-        return boost::static_pointer_cast<gtsam::NonlinearFactor>(
-            gtsam::NonlinearFactor::shared_ptr(new This(*this)));
-    }
-
-    /** implement functions needed for Testable */
-
-    /** print */
-    virtual void print(
-        const std::string&  s,
-        const KeyFormatter& keyFormatter = DefaultKeyFormatter) const override
-    {
-        std::cout << s << "ConstVelocityFactor(" << keyFormatter(this->key1())
-                  << "," << keyFormatter(this->key2()) << ","
-                  << keyFormatter(this->key3()) << ","
-                  << keyFormatter(this->key4()) << ")\n";
-        traits<double>::Print(deltaTime_, "  deltaTime: ");
-        this->noiseModel_->print("  noise model: ");
-    }
-
-    /** equals */
-    virtual bool equals(
-        const NonlinearFactor& expected, double tol = 1e-9) const override
-    {
-        const This* e = dynamic_cast<const This*>(&expected);
-        return e != nullptr && Base::equals(*e, tol) &&
-               traits<Measure>::Equals(this->deltaTime_, e->deltaTime_, tol);
-    }
-
-    /** implement functions needed to derive from Factor */
-
-    /** vector of errors */
-    Vector evaluateError(
-        const Pose3& p1, const Velocity3& v1, const Pose3& p2,
-        const Velocity3& v2, boost::optional<Matrix&> H1 = boost::none,
-        boost::optional<Matrix&> H2 = boost::none,
-        boost::optional<Matrix&> H3 = boost::none,
-        boost::optional<Matrix&> H4 = boost::none) const override
-    {
-        Vector6 err;
-        err.head<3>() = p1.translation() + v1 * deltaTime_ - p2.translation();
-        err.tail<3>() = v2 - v1;
-
-        if (H1)
-        {
-            auto& H1v = H1.value();
-            H1v.setZero(6, 6);
-            H1v.block<3, 3>(0, 3) = gtsam::I_3x3;
-        }
-        if (H2)
-        {
-            auto& H2v = H2.value();
-            H2v.resize(6, 3);
-            H2v.block<3, 3>(0, 0) = gtsam::I_3x3 * deltaTime_;
-            H2v.block<3, 3>(3, 0) = -gtsam::I_3x3;
-        }
-        if (H3)
-        {
-            auto& H3v = H3.value();
-            H3v.setZero(6, 6);
-            H3v.block<3, 3>(0, 3) = -gtsam::I_3x3;
-        }
-        if (H4)
-        {
-            auto& H4v = H4.value();
-            H4v.resize(6, 3);
-            H4v.block<3, 3>(3, 0) = gtsam::I_3x3;
-        }
-
-        return err;
-    }
-
-    /** return the measured */
-    // const Measure& measured() const { return measured_; }
-
-    /** number of variables attached to this factor */
-    std::size_t size() const { return 2; }
-
-   private:
-    /** Serialization function */
-    friend class boost::serialization::access;
-    template <class ARCHIVE>
-    void serialize(ARCHIVE& ar, const unsigned int /*version*/)
-    {
-        ar& boost::serialization::make_nvp(
-            "ConstVelocityFactor",
-            boost::serialization::base_object<Base>(*this));
-        ar& BOOST_SERIALIZATION_NVP(deltaTime_);
-    }
-
-    // Alignment, see
-    // https://eigen.tuxfamily.org/dox/group__TopicStructHavingEigenMembers.html
-   public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-};
-
-struct EigenVersionChecker
-{
-    EigenVersionChecker()
-    {
-        std::cout << "MOLA built: Eigen version=" << EIGEN_WORLD_VERSION << "."
-                  << EIGEN_MAJOR_VERSION << "." << EIGEN_MINOR_VERSION << "\n";
-    }
-};
-
 using namespace std;
 using namespace gtsam;
 using symbol_shorthand::B;
@@ -358,6 +170,8 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
         parameters.relinearizeSkip        = params_.isam2_relinearize_skip;
         parameters.cacheLinearizedFactors = false;  // for smart factors to work
         parameters.enableDetailedResults  = true;
+        MRPT_TODO("make a param");
+        parameters.evaluateNonlinearError = true;
 
         state_.isam2 = std::make_unique<gtsam::ISAM2>(parameters);
     }
@@ -369,10 +183,12 @@ void ASLAM_gtsam::spinOnce()
     MRPT_START
     ProfilerEntry tleg(profiler_, "spinOnce");
 
-    gtsam::Values result;
+    MRPT_TODO("Refactor into 2-3 methods");
 
     // Incremental SAM solution:
-    gtsam::ISAM2Result isam2_res;
+    gtsam::Values                      result;
+    gtsam::ISAM2Result                 isam2_res, isam2_res_refine;
+    std::map<std::size_t, mola::fid_t> processedFactor2molaid;
 
     if (params_.use_incremental_solver)
     {
@@ -381,40 +197,21 @@ void ASLAM_gtsam::spinOnce()
         // smart factors are not re-added to newfactors, but we should
         // re-optimize if needed anyway:
         if (!state_.newfactors.empty() || !state_.newvalues.empty() ||
-            state_.smart_factors_modified)
+            !state_.changedSmartFactors.empty())
         {
-            state_.smart_factors_modified = false;
+            // Let iSAM2 know about smart factors that might have changed:
+            gtsam::ISAM2UpdateParams updateParams;
+            updateParams.newAffectedKeys =
+                std::move(state_.changedSmartFactors);
 
-#if 0
-            // Enforce re-linearization of all smart factors?
-            if (!state_.last_values.empty())
-            {
-                gtsam::Values vals = state_.last_values;
-
-                for (const auto& newV : state_.newvalues)
-                    if (!vals.exists(newV.key))
-                        vals.insert(newV.key, newV.value);
-
-                for (const auto& sf : state_.stereo_factors)
-                    sf.second->linearize(vals);
-            }
-            if (this->isLoggingLevelVisible(mrpt::system::LVL_DEBUG))
-            {
-                for (const auto& sf : state_.stereo_factors)
-                {
-                    std::cout << "Stereo FID:" << sf.first;
-                    sf.second->print();
-                }
-            }
-#endif
             {
                 ProfilerEntry tle(profiler_, "spinOnce.isam2_update");
-                isam2_res =
-                    state_.isam2->update(state_.newfactors, state_.newvalues);
+                isam2_res = state_.isam2->update(
+                    state_.newfactors, state_.newvalues, updateParams);
 
                 // Extra refining steps:
                 for (int i = 0; i < params_.isam2_additional_update_steps; i++)
-                    state_.isam2->update();
+                    isam2_res_refine = state_.isam2->update();
             }
 
             {
@@ -445,9 +242,13 @@ void ASLAM_gtsam::spinOnce()
                 }
             }
 
+            processedFactor2molaid = state_.newFactor2molaid;
+
             // reset accumulators of new slam factors:
             state_.newfactors.resize(0);
             state_.newvalues.clear();
+            state_.changedSmartFactors.clear();
+            state_.newFactor2molaid.clear();
         }
     }
     else
@@ -489,6 +290,28 @@ void ASLAM_gtsam::spinOnce()
         // MRPT_TODO("gtsam Values: add print(ostream) method");
         if (this->isLoggingLevelVisible(mrpt::system::LVL_DEBUG))
             result.print("isam2 result:");
+
+        if (isam2_res.errorBefore && isam2_res.errorAfter)
+        {
+            MRPT_LOG_DEBUG_STREAM(
+                "Error initial  : " << *isam2_res.errorBefore);
+            MRPT_LOG_DEBUG_STREAM("Error 1st pass : " << *isam2_res.errorAfter);
+        }
+        if (isam2_res_refine.errorAfter)
+            MRPT_LOG_DEBUG_STREAM(
+                "Error final    : " << *isam2_res_refine.errorAfter);
+
+        // Process new factor IDs:
+        for (const auto& f2id : processedFactor2molaid)
+        {
+            const auto mola_id  = f2id.second;
+            const auto in_idx   = f2id.first;
+            const auto gtsam_id = isam2_res.newFactorsIndices.at(in_idx);
+            auto&      ids      = state_.stereo_factors.ids;
+
+            ids.mola2gtsam[mola_id]  = gtsam_id;
+            ids.gtsam2mola[gtsam_id] = mola_id;
+        }
 
         MRPT_LOG_INFO_STREAM(
             "iSAM2 ran for " << result.size() << " variables.");
@@ -1182,7 +1005,7 @@ fid_t ASLAM_gtsam::addFactor(const FactorDynamicsConstVel& f)
                     dt);
             }
 
-            state_.newfactors.emplace_shared<gtsam::ConstVelocityFactor>(
+            state_.newfactors.emplace_shared<mola::ConstVelocityFactorSE3>(
                 from_pose_key, from_vel_key, to_pose_key, to_vel_key, dt,
                 noise_velModel);
         }
@@ -1538,8 +1361,11 @@ void ASLAM_gtsam::onSmartFactorChanged(
 {
     MRPT_START
 
-    // NOTE: The caller must use the one-call slam_lock() instead
-    // auto lock = lockHelper(isam2_lock_);
+    MRPT_TODO("Refactor in a more elegant way?");
+
+    // NOTE: The caller must use the one-call slam_lock() instead of us doing
+    // the lock for every single observation. auto lock =
+    // lockHelper(isam2_lock_);
 
     using namespace gtsam::symbol_shorthand;  // X()
 
@@ -1560,16 +1386,25 @@ void ASLAM_gtsam::onSmartFactorChanged(
             last_obs.pixel_coords.x_left, last_obs.pixel_coords.x_right,
             last_obs.pixel_coords.y);
 
+        const gtsam::Key pose_key = X(last_obs.observing_kf);
+
         // MRPT_LOG_DEBUG_STREAM(
         //"SmartFactorStereoProjectionPose.add(): fid=" << id << " from kf
         // id#"
         //<< last_obs.observing_kf);
-        state_.smart_factors_modified = true;
 
-        const gtsam::Key pose_key = X(last_obs.observing_kf);
+        // Notify iSAM2 that this factor now has new affected Keys:
+        // Only if the factor *already* existed:
+        const auto& mola2gtsam_ids = state_.stereo_factors.ids.mola2gtsam;
+        if (mola2gtsam_ids.count(id) != 0)
+        {
+            const auto gtsam_factor_id = mola2gtsam_ids.at(id);
+            state_.changedSmartFactors[gtsam_factor_id].insert(pose_key);
+        }
 
-        MRPT_TODO("uncomment***");
-        // state_.stereo_factors.at(id)->add(sp, pose_key, state_.camera_K);
+        // Actually add observation to factor:
+        state_.stereo_factors.factors.at(id)->add(
+            sp, pose_key, state_.stereo_factors.camera_K);
     }
     else if (const auto* fstptr = dynamic_cast<const mola::SmartFactorIMU*>(f);
              fstptr != nullptr)
@@ -1653,7 +1488,7 @@ mola::id_t ASLAM_gtsam::temp_createStereoCamera(
 
     const double fx = left.fx(), fy = left.fy(), cx = left.cx(), cy = left.cy();
 
-    state_.camera_K = gtsam::Cal3_S2Stereo::shared_ptr(
+    state_.stereo_factors.camera_K = gtsam::Cal3_S2Stereo::shared_ptr(
         new gtsam::Cal3_S2Stereo(fx, fy, 0.0, cx, cy, baseline));
 
     return cam_K_id;
@@ -1682,13 +1517,12 @@ fid_t ASLAM_gtsam::addFactor(const SmartFactorStereoProjectionPose& f)
     auto factor_ptr = gtsam::SmartStereoProjectionPoseFactor::shared_ptr(
         new gtsam::SmartStereoProjectionPoseFactor(gaussian, params));
 
-    MRPT_TODO("uncomment***");
-    // state_.stereo_factors[new_fid] = factor_ptr;
-    // state_.newfactors.push_back(factor_ptr);
+    state_.stereo_factors.factors[new_fid]            = factor_ptr;
+    state_.newFactor2molaid[state_.newfactors.size()] = new_fid;
+    state_.newfactors.push_back(factor_ptr);
 
-    //    MRPT_LOG_DEBUG_STREAM(
-    //       "SmartFactorStereoProjectionPose: Created empty. fid=" <<
-    //       new_fid);
+    MRPT_LOG_DEBUG_STREAM(
+        "SmartFactorStereoProjectionPose: Created empty. fid=" << new_fid);
 
     return new_fid;
 
@@ -1750,8 +1584,8 @@ fid_t ASLAM_gtsam::addFactor(const FactorStereoProjectionPose& f)
 
     state_.newfactors.emplace_shared<
         gtsam::GenericStereoFactor<gtsam::Pose3, gtsam::Point3>>(
-        sp, gaussian, pose_key, lm_key, state_.camera_K, false, true,
-        cameraPoseOnRobot);
+        sp, gaussian, pose_key, lm_key, state_.stereo_factors.camera_K, false,
+        true, cameraPoseOnRobot);
 
     return new_fid;
 
