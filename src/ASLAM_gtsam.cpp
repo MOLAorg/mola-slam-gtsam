@@ -266,6 +266,11 @@ void ASLAM_gtsam::spinOnce()
             gtsam::LevenbergMarquardtOptimizer optimizer(
                 state_.newfactors, state_.newvalues);
             result = optimizer.optimize();
+
+            MRPT_LOG_DEBUG_STREAM(
+                "LevenbergMarquardt ran: error=" << optimizer.error()
+                                                 << "  iterations="
+                                                 << optimizer.iterations());
         }
 
         state_.newvalues   = result;
@@ -309,6 +314,10 @@ void ASLAM_gtsam::spinOnce()
             const auto gtsam_id = isam2_res.newFactorsIndices.at(in_idx);
             auto&      ids      = state_.stereo_factors.ids;
 
+            MRPT_LOG_DEBUG_STREAM(
+                "Processed: factor id #" << mola_id << "  <==> GTSAM factor #"
+                                         << gtsam_id);
+
             ids.mola2gtsam[mola_id]  = gtsam_id;
             ids.gtsam2mola[gtsam_id] = mola_id;
         }
@@ -317,18 +326,31 @@ void ASLAM_gtsam::spinOnce()
             "iSAM2 ran for " << result.size() << " variables.");
 
         // Send only those variables that have been updated:
-        ASSERT_(isam2_res.detail);
+        gtsam::KeySet changedKeys;
+        if (params_.use_incremental_solver)
+        {
+            ASSERT_(isam2_res.detail);
+            for (auto keyedStatus : isam2_res.detail->variableStatus)
+            {
+                // const auto&       status    = keyedStatus.second;
+                const gtsam::Key& key = keyedStatus.first;
+                changedKeys.insert(key);
+            }
+        }
+        else
+        {
+            // Batch: all keys
+            for (const auto& keyVal : result) changedKeys.insert(keyVal.key);
+        }
 
         auto lk = lockHelper(keys_map_lock_);
 
         // Send values to the world model:
         worldmodel_->entities_lock_for_write();
 
-        for (auto keyedStatus : isam2_res.detail->variableStatus)
+        for (auto key : changedKeys)
         {
             using std::cout;
-            // const auto&       status    = keyedStatus.second;
-            const gtsam::Key&   key   = keyedStatus.first;
             const gtsam::Value& value = result.at(key);
 
             if (auto it_kf = state_.gtsam2mola[KF_KEY_POSE].find(key);
@@ -1388,10 +1410,11 @@ void ASLAM_gtsam::onSmartFactorChanged(
 
         const gtsam::Key pose_key = X(last_obs.observing_kf);
 
-        // MRPT_LOG_DEBUG_STREAM(
-        //"SmartFactorStereoProjectionPose.add(): fid=" << id << " from kf
-        // id#"
-        //<< last_obs.observing_kf);
+#if 0
+        MRPT_LOG_DEBUG_STREAM(
+            "SmartFactorStereoProjectionPose.add(): fid="
+            << id << " from kf id#" << last_obs.observing_kf);
+#endif
 
         // Notify iSAM2 that this factor now has new affected Keys:
         // Only if the factor *already* existed:
