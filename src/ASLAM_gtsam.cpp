@@ -215,6 +215,15 @@ class ConstVelocityFactor
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
 
+struct EigenVersionChecker
+{
+    EigenVersionChecker()
+    {
+        std::cout << "MOLA built: Eigen version=" << EIGEN_WORLD_VERSION << "."
+                  << EIGEN_MAJOR_VERSION << "." << EIGEN_MINOR_VERSION << "\n";
+    }
+};
+
 using namespace std;
 using namespace gtsam;
 using symbol_shorthand::B;
@@ -328,6 +337,9 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
 
     YAML_LOAD_REQ(params_, use_incremental_solver, bool);
     YAML_LOAD_OPT(params_, save_trajectory_file_prefix, std::string);
+    YAML_LOAD_OPT(params_, isam2_additional_update_steps, int);
+    YAML_LOAD_OPT(params_, isam2_relinearize_threshold, double);
+    YAML_LOAD_OPT(params_, isam2_relinearize_skip, int);
 
     YAML_LOAD_OPT(params_, const_vel_model_std_pos, double);
     YAML_LOAD_OPT(params_, const_vel_model_std_vel, double);
@@ -342,11 +354,10 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
     if (params_.use_incremental_solver)
     {
         gtsam::ISAM2Params parameters;
-        parameters.relinearizeThreshold = 0.1;
-        parameters.relinearizeSkip      = 1;
-        // parameters.cacheLinearizedFactors = false;
-        // parameters.factorization = gtsam::ISAM2Params::QR;
-        parameters.enableDetailedResults = true;
+        parameters.relinearizeThreshold   = params_.isam2_relinearize_threshold;
+        parameters.relinearizeSkip        = params_.isam2_relinearize_skip;
+        parameters.cacheLinearizedFactors = false;  // for smart factors to work
+        parameters.enableDetailedResults  = true;
 
         state_.isam2 = std::make_unique<gtsam::ISAM2>(parameters);
     }
@@ -400,6 +411,10 @@ void ASLAM_gtsam::spinOnce()
                 ProfilerEntry tle(profiler_, "spinOnce.isam2_update");
                 isam2_res =
                     state_.isam2->update(state_.newfactors, state_.newvalues);
+
+                // Extra refining steps:
+                for (int i = 0; i < params_.isam2_additional_update_steps; i++)
+                    state_.isam2->update();
             }
 
             {

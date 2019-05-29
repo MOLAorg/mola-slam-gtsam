@@ -62,6 +62,16 @@ class ASLAM_gtsam : public BackEndBase
         /** Use iSAM2 (true) or Lev-Marq. (false) */
         bool use_incremental_solver{true};
 
+        /** iSAM2 additional update() steps. Set >0 to fasten convergence, at
+         * the cost of more processing time for each timestep */
+        int isam2_additional_update_steps{0};
+
+        /** iSAM2 relinearize threshold. Refer to iSAM2 docs */
+        double isam2_relinearize_threshold{0.1};
+
+        /** iSAM2 relinearize skip. Refer to iSAM2 docs */
+        int isam2_relinearize_skip{1};
+
         /** Saves the overall optimized trajectory at the end, in different file
          * formats, if !="" (default:"") */
         std::string save_trajectory_file_prefix{};
