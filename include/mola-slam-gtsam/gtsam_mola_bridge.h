@@ -14,7 +14,9 @@
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/navigation/NavState.h>  // Velocity3
 #include <mola-kernel/Entity.h>
-#include <mrpt/math/lightweight_geom_data.h>
+#include <mrpt/math/TPoint3D.h>
+#include <mrpt/math/TPose3D.h>
+#include <mrpt/math/TTwist3D.h>
 
 namespace mola
 {
