@@ -7,47 +7,43 @@
 # Released under GNU GPL v3. See LICENSE file
 # ------------------------------------------------------------------------------
 
+# Minimum CMake vesion: limited by CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS
+cmake_minimum_required(VERSION 3.4)
+
 # Tell CMake we'll use C++ for use in its tests/flags
 project(mola-slam-gtsam LANGUAGES CXX)
+
+# MOLA CMake scripts: "mola_xxx()"
+find_package(mola-common REQUIRED)
+
+# find dependencies:
+find_package(mrpt-obs REQUIRED)
+find_package(mrpt-gui) # TODO: Remove! when the gui -> other mapviz module
+find_package(mrpt-graphs) # TODO: Remove! when the gui -> other mapviz module
 
 # -----------------------
 # define lib:
 file(GLOB_RECURSE LIB_SRCS src/*.cpp src/*.h)
 file(GLOB_RECURSE LIB_PUBLIC_HDRS include/*.h)
 
-add_library(${PROJECT_NAME} SHARED
-    ${LIB_SRCS}
-    ${LIB_PUBLIC_HDRS}
-    )
-
-# Define common flags:
-mola_set_target_build_options(${PROJECT_NAME})
-mola_configure_library(${PROJECT_NAME})
-
-target_compile_options(${PROJECT_NAME} PRIVATE "-Wno-shadow" "-Wno-unused-parameter")
-
-# find dependencies:
-find_package(mrpt-obs)
-find_package(mrpt-gui) # TODO: Remove! when the gui -> other mapviz module
-find_package(mrpt-graphs) # TODO: Remove! when the gui -> other mapviz module
-
-# Public lib Dependencies:
-target_link_libraries(${PROJECT_NAME}
-  PUBLIC
-    mola-kernel
-    gtsam
+mola_add_library(
+	TARGET ${PROJECT_NAME}
+	SOURCES ${LIB_SRCS} ${LIB_PUBLIC_HDRS}
+	PUBLIC_LINK_LIBRARIES
+		mola-kernel
+		gtsam
+	PRIVATE_LINK_LIBRARIES
+		mrpt::obs
+		mrpt::gui
+		mrpt::graphs
 )
+
+if (CMAKE_COMPILER_IS_GNUCXX)
+	target_compile_options(${PROJECT_NAME} PRIVATE "-Wno-shadow" "-Wno-unused-parameter")
+endif()
 
 target_include_directories(${PROJECT_NAME}
     PRIVATE
     "${GTSAM_SOURCE_DIR}/gtsam/"
     "${GTSAM_BINARY_DIR}/"
     )
-
-# Private lib Dependencies:
-target_link_libraries(${PROJECT_NAME}
-  PRIVATE
-    mrpt::obs
-    mrpt::gui
-    mrpt::graphs
-)
