@@ -25,7 +25,7 @@
 #include <mrpt/core/initializer.h>
 using namespace mola;
 
-MRPT_INITIALIZER(do_register)
+MRPT_INITIALIZER(do_register_slam_gtsam)
 {
     MOLA_REGISTER_MODULE(RSLAM_gtsam);
     MOLA_REGISTER_MODULE(ASLAM_gtsam);
