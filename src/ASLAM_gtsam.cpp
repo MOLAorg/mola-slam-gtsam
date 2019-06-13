@@ -731,6 +731,8 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
     ProfilerEntry    tleg(profiler_, "doAddKeyFrame");
     ProposeKF_Output o;
 
+    MRPT_TODO("Merge KFs too close in time?");
+
     MRPT_LOG_DEBUG("Creating new KeyFrame");
 
     auto lock = lockHelper(isam2_lock_);
