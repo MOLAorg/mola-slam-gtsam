@@ -12,7 +12,7 @@
 #pragma once
 
 // mrpt includes first:
-#include <mola-kernel/BackEndBase.h>
+#include <mola-kernel/interfaces/BackEndBase.h>
 #include <mola-kernel/WorkerThreadsPool.h>
 #include <mrpt/graphs/CNetworkOfPoses.h>
 #include <mrpt/gui/CDisplayWindow3D.h>

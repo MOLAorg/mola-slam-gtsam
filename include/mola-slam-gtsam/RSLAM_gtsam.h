@@ -12,7 +12,7 @@
 #pragma once
 
 // mrpt includes first:
-#include <mola-kernel/BackEndBase.h>
+#include <mola-kernel/interfaces/BackEndBase.h>
 // gtsam next:
 #include <gtsam/slam/BetweenFactor.h>
 
