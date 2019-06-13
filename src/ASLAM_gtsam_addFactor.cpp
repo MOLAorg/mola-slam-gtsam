@@ -180,7 +180,9 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
 fid_t ASLAM_gtsam::addFactor(const FactorDynamicsConstVel& f)
 {
     MRPT_START
-    MRPT_LOG_DEBUG("Adding new FactorDynamicsConstVel");
+    MRPT_LOG_DEBUG_STREAM(
+        "Adding new FactorDynamicsConstVel between " << f.from_kf_ << " ==> "
+                                                     << f.to_kf_);
 
     // Add to the WorldModel:
     worldmodel_->factors_lock_for_write();

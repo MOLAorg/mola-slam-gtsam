@@ -733,7 +733,9 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
 
     MRPT_TODO("Merge KFs too close in time?");
 
-    MRPT_LOG_DEBUG("Creating new KeyFrame");
+    MRPT_LOG_DEBUG_FMT(
+        "Creating new KeyFrame (timestamp=%s)",
+        mrpt::system::dateTimeLocalToString(i.timestamp).c_str());
 
     auto lock = lockHelper(isam2_lock_);
 
