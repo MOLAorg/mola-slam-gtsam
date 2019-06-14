@@ -20,6 +20,7 @@ find_package(mola-common REQUIRED)
 find_package(mrpt-obs REQUIRED)
 find_package(mrpt-gui) # TODO: Remove! when the gui -> other mapviz module
 find_package(mrpt-graphs) # TODO: Remove! when the gui -> other mapviz module
+find_mola_package(mola-kernel)
 
 # -----------------------
 # define lib:
