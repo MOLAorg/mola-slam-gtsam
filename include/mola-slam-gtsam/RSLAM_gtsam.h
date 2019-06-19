@@ -23,6 +23,8 @@ namespace mola
  * \ingroup mola_slam_gtsam_grp */
 class RSLAM_gtsam : public BackEndBase
 {
+    DEFINE_MRPT_OBJECT(RSLAM_gtsam)
+
    public:
     RSLAM_gtsam();
     ~RSLAM_gtsam() override = default;

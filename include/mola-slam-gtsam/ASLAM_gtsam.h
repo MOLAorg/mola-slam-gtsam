@@ -12,8 +12,8 @@
 #pragma once
 
 // mrpt includes first:
-#include <mola-kernel/interfaces/BackEndBase.h>
 #include <mola-kernel/WorkerThreadsPool.h>
+#include <mola-kernel/interfaces/BackEndBase.h>
 #include <mrpt/graphs/CNetworkOfPoses.h>
 #include <mrpt/gui/CDisplayWindow3D.h>
 #include <mrpt/poses/CPose3DInterpolator.h>
@@ -47,6 +47,8 @@ struct TriMap
  * \ingroup mola_slam_gtsam_grp */
 class ASLAM_gtsam : public BackEndBase
 {
+    DEFINE_MRPT_OBJECT(ASLAM_gtsam)
+
    public:
     ASLAM_gtsam();
     ~ASLAM_gtsam() override = default;
