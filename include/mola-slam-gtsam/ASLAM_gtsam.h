@@ -90,6 +90,11 @@ class ASLAM_gtsam : public BackEndBase
          * formats, if !="" (default:"") */
         std::string save_trajectory_file_prefix{};
 
+        /** Save map at end of a SLAM session. See
+         * WorldModel::map_base_directory() to see where maps are stored by
+         * default and how to change it. */
+        bool save_map_at_end{true};
+
         /** Const. velocity model: sigma of the position equation (see paper) */
         double const_vel_model_std_pos{0.1};
         /** Const. velocity model: sigma of the velocity equation (see paper) */

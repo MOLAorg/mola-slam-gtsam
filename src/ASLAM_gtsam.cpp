@@ -148,6 +148,7 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
 
     YAML_LOAD_REQ(params_, use_incremental_solver, bool);
     YAML_LOAD_OPT(params_, save_trajectory_file_prefix, std::string);
+    YAML_LOAD_OPT(params_, save_map_at_end, bool);
     YAML_LOAD_OPT(params_, isam2_additional_update_steps, int);
     YAML_LOAD_OPT(params_, isam2_relinearize_threshold, double);
     YAML_LOAD_OPT(params_, isam2_relinearize_skip, int);
@@ -1031,6 +1032,17 @@ void ASLAM_gtsam::onQuit()
     using mrpt::poses::CPose3D;
     using mrpt::poses::CPose3DInterpolator;
     using namespace std::string_literals;
+
+    // save Map?
+    if (params_.save_map_at_end)
+    {
+        // Pass relative path:
+        auto mapFil = worldmodel_->map_base_directory();
+        mapFil += "/WorldModel.map"s;
+
+        MRPT_LOG_INFO_STREAM("Saving WorldModel map to: " << mapFil);
+        worldmodel_->map_save_to(mapFil);
+    }
 
     // save path?
     if (!params_.save_trajectory_file_prefix.empty())
