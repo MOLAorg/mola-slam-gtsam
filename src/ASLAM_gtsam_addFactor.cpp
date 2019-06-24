@@ -130,7 +130,7 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
         // Init vel (if applicable):
         switch (params_.state_vector)
         {
-            case StateVectorType::DynSE3:
+            case StateVectorType::SE3Vel:
             {
                 const gtsam::Vector3 vel0 = gtsam::Z_3x1;
                 if (!state_.newvalues.exists(to_vel_key))
@@ -139,7 +139,7 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
                     state_.newvalues.update(to_vel_key, vel0);
             }
             break;
-            case StateVectorType::DynSE2:
+            case StateVectorType::SE2Vel:
             {
                 THROW_EXCEPTION("TODO");
             }
@@ -158,12 +158,12 @@ fid_t ASLAM_gtsam::addFactor(const FactorRelativePose3& f)
         case StateVectorType::SE2:
             THROW_EXCEPTION("to do!");
             break;
-        case StateVectorType::DynSE2:
+        case StateVectorType::SE2Vel:
             THROW_EXCEPTION("to do!");
             break;
 
         case StateVectorType::SE3:
-        case StateVectorType::DynSE3:
+        case StateVectorType::SE3Vel:
             state_.newfactors
                 .emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
                     from_pose_key, to_pose_key, measure, robust_noise_model);
@@ -232,7 +232,7 @@ fid_t ASLAM_gtsam::addFactor(const FactorDynamicsConstVel& f)
         // Init vel (if applicable):
         switch (params_.state_vector)
         {
-            case StateVectorType::DynSE3:
+            case StateVectorType::SE3Vel:
             {
                 const gtsam::Vector3 vel0 = gtsam::Z_3x1;
                 if (!state_.newvalues.exists(to_vel_key))
@@ -241,7 +241,7 @@ fid_t ASLAM_gtsam::addFactor(const FactorDynamicsConstVel& f)
                     state_.newvalues.update(to_vel_key, vel0);
             }
             break;
-            case StateVectorType::DynSE2:
+            case StateVectorType::SE2Vel:
             {
                 THROW_EXCEPTION("TODO");
             }
@@ -257,7 +257,7 @@ fid_t ASLAM_gtsam::addFactor(const FactorDynamicsConstVel& f)
     // Add const-vel factor to gtsam itself:
     switch (params_.state_vector)
     {
-        case StateVectorType::DynSE3:
+        case StateVectorType::SE3Vel:
         {
             const double dt = mrpt::system::timeDifference(from_tim, to_tim);
             ASSERT_(dt > 0);

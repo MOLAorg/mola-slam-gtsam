@@ -63,8 +63,8 @@ class ASLAM_gtsam : public BackEndBase
     {
         SE2 = 0,
         SE3,
-        DynSE2,
-        DynSE3,
+        SE2Vel,
+        SE3Vel,
         Undefined = -1
     };
 
@@ -187,7 +187,7 @@ class ASLAM_gtsam : public BackEndBase
 
         /** Map between mola WorldModel KF indices and the corresponding gtsam
          * Key(s) value(s). When in SE2/SE3 mode, only the pose Key is used.
-         * When in DynSE2/DynSE3 mode, the extra key for the velocity variable
+         * When in SE2Vel/SE3Vel mode, the extra key for the velocity variable
          * is stored a well */
         std::map<mola::id_t, KF_gtsam_keys> mola2gtsam;
         /** Inverse map for `mola2gtsam` (indexed by gtsam *pose* ID) */
@@ -279,6 +279,6 @@ class ASLAM_gtsam : public BackEndBase
 MRPT_ENUM_TYPE_BEGIN(mola::ASLAM_gtsam::StateVectorType)
 MRPT_FILL_ENUM_MEMBER(mola::ASLAM_gtsam::StateVectorType, SE2);
 MRPT_FILL_ENUM_MEMBER(mola::ASLAM_gtsam::StateVectorType, SE3);
-MRPT_FILL_ENUM_MEMBER(mola::ASLAM_gtsam::StateVectorType, DynSE2);
-MRPT_FILL_ENUM_MEMBER(mola::ASLAM_gtsam::StateVectorType, DynSE3);
+MRPT_FILL_ENUM_MEMBER(mola::ASLAM_gtsam::StateVectorType, SE2Vel);
+MRPT_FILL_ENUM_MEMBER(mola::ASLAM_gtsam::StateVectorType, SE3Vel);
 MRPT_ENUM_TYPE_END()

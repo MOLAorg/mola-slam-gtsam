@@ -484,11 +484,11 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
         case StateVectorType::SE2:
             THROW_EXCEPTION("to do!");
             break;
-        case StateVectorType::DynSE2:
+        case StateVectorType::SE2Vel:
             THROW_EXCEPTION("to do!");
             break;
 
-        case StateVectorType::DynSE3:
+        case StateVectorType::SE3Vel:
         case StateVectorType::SE3:
         {
             // Index map: MOLA worldmodel <-> gtsam
@@ -582,7 +582,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
             new_ent = std::move(new_kf);
         }
         break;
-        case StateVectorType::DynSE3:
+        case StateVectorType::SE3Vel:
         {
             RelDynPose3KF new_kf;
             new_kf.base_id_   = state_.root_kf_id;
@@ -640,7 +640,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
                     state_.newvalues.insert(key_kf_pose, it_prev->value);
                 }
                 break;
-                case StateVectorType::DynSE3:
+                case StateVectorType::SE3Vel:
                 {
                     state_.newvalues.insert(key_kf_pose, it_prev->value);
 
@@ -649,7 +649,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
                         state_.newvalues.insert(key_kf_vel, vel0);
                 }
                 break;
-                case StateVectorType::DynSE2:
+                case StateVectorType::SE2Vel:
                 {
                     THROW_EXCEPTION("TODO");
                 }
@@ -1086,11 +1086,11 @@ void ASLAM_gtsam::internal_add_gtsam_prior_vel(const mola::id_t kf_id)
         case StateVectorType::SE2:
             // Nothing to do
             break;
-        case StateVectorType::DynSE2:
+        case StateVectorType::SE2Vel:
             THROW_EXCEPTION("to do!");
             break;
 
-        case StateVectorType::DynSE3:
+        case StateVectorType::SE3Vel:
         {
             const gtsam::Vector3 vel0     = gtsam::Z_3x1;
             const gtsam::Vector3 vel_stds = prior_std_vel * gtsam::ones(3, 1);
