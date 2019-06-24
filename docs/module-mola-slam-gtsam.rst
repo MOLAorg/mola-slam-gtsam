@@ -1,7 +1,3 @@
-.. index::
-   single: mola-slam-gtsam
-   module: mola-slam-gtsam
-
 ========================
 Module: mola-slam-gtsam
 ========================
@@ -17,3 +13,7 @@ Provided MOLA modules:
 
 
 (Write me!)
+
+.. index::
+   single: mola-slam-gtsam
+   module: mola-slam-gtsam
