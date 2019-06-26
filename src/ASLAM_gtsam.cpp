@@ -550,6 +550,35 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
     MRPT_END
 }
 
+mola::id_t ASLAM_gtsam::find_closest_KF_in_time(
+    const mrpt::Clock::time_point& t) const
+{
+    const double kf_merge_time_tolerance = 0.1;
+    const auto   tim_delta               = std::chrono::microseconds(
+        static_cast<uint32_t>(1e6 * kf_merge_time_tolerance));
+
+    auto t_min = t, t_max = t;
+    t_min -= tim_delta;
+    t_max += tim_delta;
+
+    auto it_lo = state_.time2kf.lower_bound(t_min);
+    auto it_hi = state_.time2kf.upper_bound(t_max);
+
+    double     min_distance = std::numeric_limits<double>::max();
+    mola::id_t min_id       = mola::INVALID_ID;
+
+    for (auto it = it_lo; it != it_hi; ++it)
+    {
+        const auto dist = std::abs(mrpt::system::timeDifference(it->first, t));
+        if (dist < min_distance)
+        {
+            min_distance = dist;
+            min_id       = it->second;
+        }
+    }
+    return min_id;
+}
+
 // isam2_lock_ is locked from the caller site.
 mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
 {
@@ -558,13 +587,8 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
     using namespace gtsam::symbol_shorthand;  // X(), V()
 
     // Do we already have a KF for this timestamp?
-    if (auto it_kf = state_.time2kf.find(i.timestamp);
-        it_kf != state_.time2kf.end())
-    {
-        // Yes: return it since we cannot have two KFs for the same
-        // timestamp.
-        return it_kf->second;
-    }
+    auto known_kf_id = find_closest_KF_in_time(i.timestamp);
+    if (known_kf_id != mola::INVALID_ID) return known_kf_id;
 
     MRPT_TODO("refactor this to avoid code duplication -> template?");
     mola::Entity new_ent;
@@ -734,8 +758,6 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
     MRPT_START
     ProfilerEntry    tleg(profiler_, "doAddKeyFrame");
     ProposeKF_Output o;
-
-    MRPT_TODO("Merge KFs too close in time?");
 
     MRPT_LOG_DEBUG_FMT(
         "Creating new KeyFrame (timestamp=%s)",

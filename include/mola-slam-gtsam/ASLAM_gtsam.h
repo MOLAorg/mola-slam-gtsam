@@ -246,6 +246,9 @@ class ASLAM_gtsam : public BackEndBase
     std::mutex                         latest_localization_data_mtx_;
     AdvertiseUpdatedLocalization_Input latest_localization_data_;
 
+    /** Returns the closest KF in time, or invalid_id if none. */
+    mola::id_t find_closest_KF_in_time(const mrpt::Clock::time_point& t) const;
+
     // TODO: Temporary code, should be moved to a new module "MapViz":
     // --------------
     mola::WorkerThreadsPool gui_updater_pool_{
