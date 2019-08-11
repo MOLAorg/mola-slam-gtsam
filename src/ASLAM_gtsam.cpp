@@ -120,7 +120,9 @@ struct IMUHelper
 
 }  // namespace gtsam
 
-gtsam::IMUHelper imu;
+MRPT_TODO(
+    "Disabled temporarily to avoid segfault; also, it must be refactored");
+// gtsam::IMUHelper imu;
 
 // ----------------------------------------------
 
@@ -536,6 +538,10 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
         // state_.newvalues: B() & V() already created in
         // internal_addKeyFrame_Regular() above. Just add the prior factors:
 
+        MRPT_TODO(
+            "Disabled temporarily; see comment for `gtsam::IMUHelper imu`");
+
+#if 0
         // Bias prior
         state_.newfactors.add(gtsam::PriorFactor<gtsam::imuBias::ConstantBias>(
             B(new_id), imu.priorImuBias, imu.biasNoiseModel));
@@ -543,6 +549,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
         // Velocity prior - assume stationary
         state_.newfactors.add(gtsam::PriorFactor<gtsam::Vector3>(
             V(new_id), gtsam::Vector3(0, 0, 0), imu.velocityNoiseModel));
+#endif
     }
 
     return new_id;
@@ -691,8 +698,12 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Regular(const ProposeKF_Input& i)
         if (!state_.newvalues.exists(V(new_kf_id)))
             state_.newvalues.insert(V(new_kf_id), gtsam::Vector3(0, 0, 0));
 
+        MRPT_TODO(
+            "Disabled temporarily; see comment for `gtsam::IMUHelper imu`");
+#if 0
         if (!state_.newvalues.exists(B(new_kf_id)))
             state_.newvalues.insert(B(new_kf_id), imu.prevBias);
+#endif
     }
 
     if (!init_value_added)
@@ -1196,7 +1207,10 @@ void ASLAM_gtsam::onSmartFactorChanged(
             {
                 const gtsam::Vector3 acc(fimu.ax_, fimu.ay_, fimu.az_);
                 const gtsam::Vector3 gyr(fimu.wx_, fimu.wy_, fimu.wz_);
-                imu.preintegrated->integrateMeasurement(acc, gyr, fimu.dt_);
+                MRPT_TODO(
+                    "Disabled temporarily; see comment for `gtsam::IMUHelper "
+                    "imu`");
+                // imu.preintegrated->integrateMeasurement(acc, gyr, fimu.dt_);
             }
             break;
             case SmartFactorIMU::NewState::FACTOR:
@@ -1217,7 +1231,11 @@ void ASLAM_gtsam::onSmartFactorChanged(
                 using gtsam::symbol_shorthand::X;
 
                 MRPT_TODO("Use dynamically-created instead of `imu`");
+                MRPT_TODO(
+                    "Disabled temporarily; see comment for `gtsam::IMUHelper "
+                    "imu`");
 
+#if 0
                 gtsam::CombinedImuFactor imuFactor(
                     X(kf_m1), V(kf_m1), X(kf_cur), V(kf_m1), B(kf_m1),
                     B(kf_cur), *imu.preintegrated);
@@ -1234,6 +1252,7 @@ void ASLAM_gtsam::onSmartFactorChanged(
                     state_.at_new_or_last_values<gtsam::imuBias::ConstantBias>(
                         B(kf_cur));
                 imu.preintegrated->resetIntegrationAndSetBias(imu.prevBias);
+#endif
             }
             break;
 
