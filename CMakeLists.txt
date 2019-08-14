@@ -43,8 +43,14 @@ if (CMAKE_COMPILER_IS_GNUCXX)
 	target_compile_options(${PROJECT_NAME} PRIVATE "-Wno-shadow" "-Wno-unused-parameter")
 endif()
 
+
 target_include_directories(${PROJECT_NAME}
     PRIVATE
     "${GTSAM_SOURCE_DIR}/gtsam/"
     "${GTSAM_BINARY_DIR}/"
     )
+
+# -----------------------
+# define tests:
+enable_testing()
+add_subdirectory(tests)
