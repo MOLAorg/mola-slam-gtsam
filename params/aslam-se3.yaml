@@ -1,0 +1,22 @@
+# File to be $include{}'d into the param block of other high-level SLAM files.
+
+# true: use iSAM2
+# false: use global Levenberg-Marquardt
+use_incremental_solver: true
+# iSAM2 additional update() steps. Set >0 to fasten convergence, at
+# the cost of more processing time for each timestep:
+isam2_additional_update_steps: 2
+# Refer to iSAM2 C++ docs for these ones:
+isam2_relinearize_threshold: 0.01
+isam2_relinearize_skip: 1
+# ------
+# Select state space representation for KeyFrame poses:
+# See options in: https://docs.mola-slam.org/latest/concept-state-vector.html
+state_vector: SE3
+# --- constant velocity model params (see papers) ---
+const_vel_model_std_pos: 1.0  # [m]
+const_vel_model_std_vel: 5.0  # [m/s]
+# ------
+# Save trajectory to file at end? useful for plots, error evaluation,...
+#save_trajectory_file_prefix: kitti_result_${KITTI_SEQ}
+# ------------------------
