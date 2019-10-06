@@ -1,3 +1,5 @@
+.. _mola-slam-gtsam:
+
 ========================
 Module: mola-slam-gtsam
 ========================
