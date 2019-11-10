@@ -47,7 +47,7 @@ struct TriMap
  * \ingroup mola_slam_gtsam_grp */
 class ASLAM_gtsam : public BackEndBase
 {
-    DEFINE_MRPT_OBJECT(ASLAM_gtsam)
+    DEFINE_MRPT_OBJECT(ASLAM_gtsam, mola)
 
    public:
     ASLAM_gtsam();

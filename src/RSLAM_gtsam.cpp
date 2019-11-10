@@ -17,7 +17,7 @@
 using namespace mola;
 
 // arguments: class_name, parent_class, class namespace
-IMPLEMENTS_MRPT_OBJECT_NS_PREFIX(RSLAM_gtsam, BackEndBase, mola);
+IMPLEMENTS_MRPT_OBJECT(RSLAM_gtsam, BackEndBase, mola)
 
 RSLAM_gtsam::RSLAM_gtsam() = default;
 

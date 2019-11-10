@@ -31,7 +31,7 @@
 using namespace mola;
 
 // arguments: class_name, parent_class, class namespace
-IMPLEMENTS_MRPT_OBJECT_NS_PREFIX(ASLAM_gtsam, BackEndBase, mola);
+IMPLEMENTS_MRPT_OBJECT(ASLAM_gtsam, BackEndBase, mola)
 
 namespace gtsam
 {

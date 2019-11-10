@@ -23,7 +23,7 @@ namespace mola
  * \ingroup mola_slam_gtsam_grp */
 class RSLAM_gtsam : public BackEndBase
 {
-    DEFINE_MRPT_OBJECT(RSLAM_gtsam)
+    DEFINE_MRPT_OBJECT(RSLAM_gtsam, mola)
 
    public:
     RSLAM_gtsam();
