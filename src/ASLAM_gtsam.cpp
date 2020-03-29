@@ -968,9 +968,7 @@ void ASLAM_gtsam::doUpdateDisplay(std::shared_ptr<DisplayInfo> di)
                     "Timestamp: %s",
                     mrpt::system::dateTimeLocalToString(di->current_tim)
                         .c_str());
-                display_->addTextMessage(
-                    5, 5, s, mrpt::img::TColorf(1, 1, 1), "sans", 11,
-                    mrpt::opengl::NICE, 0 /*id*/, 1.5, 0.1, true /*shadow*/);
+                display_->addTextMessage(5, 5, s, 0 /*id*/);
             }
         }
         display_->setCameraPointingToPoint(
