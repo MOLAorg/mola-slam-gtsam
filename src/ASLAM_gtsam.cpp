@@ -560,6 +560,8 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
 mola::id_t ASLAM_gtsam::find_closest_KF_in_time(
     const mrpt::Clock::time_point& t) const
 {
+    MRPT_TODO("Rewrite using integers as map keys with desired tolerance");
+
     const double kf_merge_time_tolerance = 0.1;
     const auto   tim_delta               = std::chrono::microseconds(
         static_cast<uint32_t>(1e6 * kf_merge_time_tolerance));
