@@ -501,8 +501,9 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
             const auto state0 = gtsam::Pose3::identity();
 
             const gtsam::Vector6 diag_stds =
-                (gtsam::Vector6() << prior_std_rot * gtsam::ones(3, 1),
-                 prior_std_pos * gtsam::ones(3, 1))
+                (gtsam::Vector6()
+                     << prior_std_rot * Eigen::Vector3d::Constant(1.0),
+                 prior_std_pos * Eigen::Vector3d::Constant(1.0))
                     .finished();
 
             // RefPose:
@@ -1125,8 +1126,9 @@ void ASLAM_gtsam::internal_add_gtsam_prior_vel(const mola::id_t kf_id)
 
         case StateVectorType::SE3Vel:
         {
-            const gtsam::Vector3 vel0     = gtsam::Z_3x1;
-            const gtsam::Vector3 vel_stds = prior_std_vel * gtsam::ones(3, 1);
+            const gtsam::Vector3 vel0 = gtsam::Z_3x1;
+            const gtsam::Vector3 vel_stds =
+                prior_std_vel * Eigen::Vector3d::Constant(1.0);
             // First actual KeyFrame:
             if (!state_.newvalues.exists(key_kf_vel))
                 state_.newvalues.insert(key_kf_vel, vel0);
