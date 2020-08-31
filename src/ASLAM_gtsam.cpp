@@ -23,10 +23,10 @@
 #include <mola-kernel/yaml_helpers.h>
 #include <mola-slam-gtsam/ASLAM_gtsam.h>
 #include <mola-slam-gtsam/gtsam_mola_bridge.h>
+#include <mrpt/containers/yaml.h>
 #include <mrpt/opengl/CSetOfLines.h>  // TODO: Remove after vizmap module
 #include <mrpt/opengl/graph_tools.h>  // TODO: Remove after vizmap module
 #include <mrpt/opengl/stock_objects.h>  // TODO: Remove after vizmap module
-#include <yaml-cpp/yaml.h>
 
 using namespace mola;
 
@@ -136,7 +136,7 @@ void ASLAM_gtsam::initialize(const std::string& cfg_block)
     MRPT_LOG_DEBUG_STREAM("Initializing with these params:\n" << cfg_block);
 
     // Mandatory parameters:
-    auto c = YAML::Load(cfg_block);
+    auto c = mrpt::containers::yaml::FromText(cfg_block);
 
     ENSURE_YAML_ENTRY_EXISTS(c, "params");
     auto cfg = c["params"];
@@ -905,11 +905,11 @@ void ASLAM_gtsam::doUpdateDisplay(std::shared_ptr<DisplayInfo> di)
                 gl_ptr->setPose(di->vizmap.nodes.at(id));
             }
 
-            mrpt::system::TParametersDouble params;
-            params["show_ID_labels"]    = 1;
-            params["show_ground_grid"]  = 1;
-            params["show_edges"]        = 1;
-            params["show_node_corners"] = 1;
+            mrpt::containers::yaml params;
+            params["show_ID_labels"]    = true;
+            params["show_ground_grid"]  = true;
+            params["show_edges"]        = true;
+            params["show_node_corners"] = true;
 
             display_state_.slam_graph_gl->clear();
             auto gl_graph =

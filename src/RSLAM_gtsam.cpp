@@ -12,7 +12,7 @@
 
 #include <mola-kernel/yaml_helpers.h>
 #include <mola-slam-gtsam/RSLAM_gtsam.h>
-#include <yaml-cpp/yaml.h>
+#include <mrpt/containers/yaml.h>
 
 using namespace mola;
 
@@ -29,7 +29,7 @@ void RSLAM_gtsam::initialize(const std::string& cfg_block)
     MRPT_LOG_DEBUG_STREAM("Initializing with these params:\n" << cfg_block);
 
     // Mandatory parameters:
-    auto cfg = YAML::Load(cfg_block);
+    auto cfg = mrpt::containers::yaml::FromText(cfg_block);
 
     ENSURE_YAML_ENTRY_EXISTS(cfg, "params");
     auto params = cfg["params"];
