@@ -12,7 +12,7 @@
 #pragma once
 
 // mrpt includes first:
-#include <mola-kernel/WorkerThreadsPool.h>
+#include <mrpt/core/WorkerThreadsPool.h>
 #include <mola-kernel/interfaces/BackEndBase.h>
 #include <mrpt/graphs/CNetworkOfPoses.h>
 #include <mrpt/gui/CDisplayWindow3D.h>
@@ -251,8 +251,8 @@ class ASLAM_gtsam : public BackEndBase
 
     // TODO: Temporary code, should be moved to a new module "MapViz":
     // --------------
-    mola::WorkerThreadsPool gui_updater_pool_{
-        1, mola::WorkerThreadsPool::POLICY_DROP_OLD};
+    mrpt::WorkerThreadsPool gui_updater_pool_{
+        1, mrpt::WorkerThreadsPool::POLICY_DROP_OLD};
 
     struct DisplayInfo
     {
