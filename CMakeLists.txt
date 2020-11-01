@@ -37,6 +37,11 @@ mola_add_library(
 		mrpt::obs
 		mrpt::gui
 		mrpt::graphs
+	CMAKE_DEPENDENCIES
+		mola-kernel
+		gtsam
+		mrpt-obs
+		mrpt-graphs
 )
 
 if (CMAKE_COMPILER_IS_GNUCXX)
