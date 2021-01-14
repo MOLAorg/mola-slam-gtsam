@@ -10,7 +10,7 @@
  * @date   Dec 21, 2018
  */
 
-#include <mola-kernel/yaml_helpers.h>
+#include <mola-yaml/yaml_helpers.h>
 #include <mola-slam-gtsam/RSLAM_gtsam.h>
 #include <mrpt/containers/yaml.h>
 

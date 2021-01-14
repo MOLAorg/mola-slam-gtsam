@@ -20,7 +20,7 @@
 #include <mola-kernel/entities/entities-common.h>
 #include <mola-kernel/lock_helper.h>
 #include <mola-kernel/variant_helper.h>  // overloaded{}
-#include <mola-kernel/yaml_helpers.h>
+#include <mola-yaml/yaml_helpers.h>
 #include <mola-slam-gtsam/ASLAM_gtsam.h>
 #include <mola-slam-gtsam/gtsam_mola_bridge.h>
 #include <mrpt/containers/yaml.h>

@@ -1,11 +1,4 @@
-# ------------------------------------------------------------------------------
-#        Multi primitive-to-primitive (MP2) ICP C++ library
-#
-# Copyright (C) 2018-2019, Jose Luis Blanco-Claraco, contributors (AUTHORS.md)
-# All rights reserved.
-# Released under FreeBSD 3. See LICENSE file
-# ------------------------------------------------------------------------------
-
+# Unit tests:
 mola_add_executable(
   DONT_INSTALL
   TARGET  test-gtsam-basic-graph
@@ -14,7 +7,6 @@ mola_add_executable(
     gtsam
 )
 add_test(SLAM_GTSAM_basic_graph ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test-gtsam-basic-graph)
-
 
 target_include_directories(test-gtsam-basic-graph
     PRIVATE
