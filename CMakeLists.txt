@@ -33,6 +33,7 @@ mola_add_library(
 	PUBLIC_LINK_LIBRARIES
 		mola-kernel
 		gtsam
+		gtsam_unstable
 	PRIVATE_LINK_LIBRARIES
 		mrpt::obs
 		mrpt::gui
