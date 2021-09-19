@@ -20,9 +20,9 @@
 #include <mola-kernel/entities/entities-common.h>
 #include <mola-kernel/lock_helper.h>
 #include <mola-kernel/variant_helper.h>  // overloaded{}
-#include <mola-yaml/yaml_helpers.h>
 #include <mola-slam-gtsam/ASLAM_gtsam.h>
 #include <mola-slam-gtsam/gtsam_mola_bridge.h>
+#include <mola-yaml/yaml_helpers.h>
 #include <mrpt/containers/yaml.h>
 #include <mrpt/opengl/CSetOfLines.h>  // TODO: Remove after vizmap module
 #include <mrpt/opengl/graph_tools.h>  // TODO: Remove after vizmap module
@@ -128,16 +128,14 @@ MRPT_TODO(
 
 ASLAM_gtsam::ASLAM_gtsam() = default;
 
-void ASLAM_gtsam::initialize(const std::string& cfg_block)
+void ASLAM_gtsam::initialize(const Yaml& c)
 {
     MRPT_START
     ProfilerEntry tle(profiler_, "initialize");
 
-    MRPT_LOG_DEBUG_STREAM("Initializing with these params:\n" << cfg_block);
+    MRPT_LOG_DEBUG_STREAM("Initializing with these params:\n" << c);
 
     // Mandatory parameters:
-    auto c = mrpt::containers::yaml::FromText(cfg_block);
-
     ENSURE_YAML_ENTRY_EXISTS(c, "params");
     auto cfg = c["params"];
 

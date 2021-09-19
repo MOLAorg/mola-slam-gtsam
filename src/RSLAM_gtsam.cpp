@@ -10,8 +10,8 @@
  * @date   Dec 21, 2018
  */
 
-#include <mola-yaml/yaml_helpers.h>
 #include <mola-slam-gtsam/RSLAM_gtsam.h>
+#include <mola-yaml/yaml_helpers.h>
 #include <mrpt/containers/yaml.h>
 
 using namespace mola;
@@ -21,16 +21,14 @@ IMPLEMENTS_MRPT_OBJECT(RSLAM_gtsam, BackEndBase, mola)
 
 RSLAM_gtsam::RSLAM_gtsam() = default;
 
-void RSLAM_gtsam::initialize(const std::string& cfg_block)
+void RSLAM_gtsam::initialize(const Yaml& cfg)
 {
     MRPT_START
     ProfilerEntry tle(profiler_, "initialize");
 
-    MRPT_LOG_DEBUG_STREAM("Initializing with these params:\n" << cfg_block);
+    MRPT_LOG_DEBUG_STREAM("Initializing with these params:\n" << cfg);
 
     // Mandatory parameters:
-    auto cfg = mrpt::containers::yaml::FromText(cfg_block);
-
     ENSURE_YAML_ENTRY_EXISTS(cfg, "params");
     auto params = cfg["params"];
 
