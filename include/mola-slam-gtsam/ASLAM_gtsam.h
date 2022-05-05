@@ -12,8 +12,8 @@
 #pragma once
 
 // mrpt includes first:
-#include <mrpt/core/WorkerThreadsPool.h>
 #include <mola-kernel/interfaces/BackEndBase.h>
+#include <mrpt/core/WorkerThreadsPool.h>
 #include <mrpt/graphs/CNetworkOfPoses.h>
 #include <mrpt/gui/CDisplayWindow3D.h>
 #include <mrpt/poses/CPose3DInterpolator.h>
@@ -109,7 +109,7 @@ class ASLAM_gtsam : public BackEndBase
     ProposeKF_Output doAddKeyFrame(const ProposeKF_Input& i) override;
     AddFactor_Output doAddFactor(Factor& newF) override;
     void             doAdvertiseUpdatedLocalization(
-                    AdvertiseUpdatedLocalization_Input l) override;
+                    const AdvertiseUpdatedLocalization_Input& l) override;
     void onSmartFactorChanged(
         mola::fid_t id, const mola::FactorBase* f) override;
 

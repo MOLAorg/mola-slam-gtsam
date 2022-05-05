@@ -423,7 +423,8 @@ void ASLAM_gtsam::spinOnce()
         }
         di->vizmap = state_.vizmap;  // make a copy
     }
-    gui_updater_pool_.enqueue(&ASLAM_gtsam::doUpdateDisplay, this, di);
+    const auto futGui =
+        gui_updater_pool_.enqueue(&ASLAM_gtsam::doUpdateDisplay, this, di);
 
     MRPT_END
 }
@@ -802,7 +803,7 @@ BackEndBase::ProposeKF_Output ASLAM_gtsam::doAddKeyFrame(
 }
 
 void ASLAM_gtsam::doAdvertiseUpdatedLocalization(
-    AdvertiseUpdatedLocalization_Input l)
+    const AdvertiseUpdatedLocalization_Input& l)
 {
     MRPT_START
 

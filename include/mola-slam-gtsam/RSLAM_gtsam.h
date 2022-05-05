@@ -37,7 +37,7 @@ class RSLAM_gtsam : public BackEndBase
     ProposeKF_Output doAddKeyFrame(const ProposeKF_Input& i) override;
     AddFactor_Output doAddFactor(Factor& f) override;
     void             doAdvertiseUpdatedLocalization(
-                    AdvertiseUpdatedLocalization_Input l) override;
+                    const AdvertiseUpdatedLocalization_Input& l) override;
 
    private:
 };
