@@ -497,7 +497,7 @@ mola::id_t ASLAM_gtsam::internal_addKeyFrame_Root(const ProposeKF_Input& i)
             const auto key_kf_pose = X(new_id);
 
             // Rot, Pos:
-            const auto state0 = gtsam::Pose3::identity();
+            const auto state0 = gtsam::Pose3::Identity();
 
             const gtsam::Vector6 diag_stds =
                 (gtsam::Vector6()
