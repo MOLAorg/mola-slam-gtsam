@@ -24,6 +24,7 @@
 #include <mola-slam-gtsam/gtsam_mola_bridge.h>
 #include <mola-yaml/yaml_helpers.h>
 #include <mrpt/containers/yaml.h>
+#include <mrpt/opengl/COpenGLScene.h>  // TODO: Remove after vizmap module
 #include <mrpt/opengl/CSetOfLines.h>  // TODO: Remove after vizmap module
 #include <mrpt/opengl/graph_tools.h>  // TODO: Remove after vizmap module
 #include <mrpt/opengl/stock_objects.h>  // TODO: Remove after vizmap module
